@@ -214,14 +214,61 @@ pub(crate) fn choose_interval_minutes(block_time: i64, now: i64) -> Option<u32> 
     })
 }
 
+fn requested_interval_is_available(interval_minutes: u32, block_time: i64, now: i64) -> bool {
+    let age_seconds = now.saturating_sub(block_time);
+    let retention_seconds = i64::from(interval_minutes) * 60 * 720;
+
+    interval_minutes <= MAX_KRAKEN_INTERVAL_MINUTES && age_seconds <= retention_seconds
+}
+
+fn requested_interval_too_old_error(
+    source_name: &str,
+    interval_minutes: u32,
+    block_time: i64,
+    now: i64,
+) -> anyhow::Error {
+    let timestamp = format_local_timestamp(block_time);
+
+    match choose_interval_minutes(block_time, now) {
+        Some(minimum_interval_minutes) => anyhow!(
+            "transaction at {timestamp} is too old for {source_name}={interval_minutes}; Kraken only keeps the most recent 720 candles per interval, so use {minimum_interval_minutes} minutes or larger"
+        ),
+        None => anyhow!(
+            "transaction at {timestamp} is too old for Kraken OHLC history with candles up to 1d"
+        ),
+    }
+}
+
 pub(crate) fn choose_candle_interval(
     candle_override_minutes: Option<u32>,
     default_candle_minutes: Option<u32>,
     block_time: i64,
     now: i64,
 ) -> Result<u32> {
-    if let Some(interval_minutes) = candle_override_minutes.or(default_candle_minutes) {
-        return Ok(interval_minutes);
+    if let Some(interval_minutes) = candle_override_minutes {
+        if requested_interval_is_available(interval_minutes, block_time, now) {
+            return Ok(interval_minutes);
+        }
+
+        return Err(requested_interval_too_old_error(
+            "--candle",
+            interval_minutes,
+            block_time,
+            now,
+        ));
+    }
+
+    if let Some(interval_minutes) = default_candle_minutes {
+        if requested_interval_is_available(interval_minutes, block_time, now) {
+            return Ok(interval_minutes);
+        }
+
+        return Err(requested_interval_too_old_error(
+            "DEFAULT_CANDLE_MINUTES",
+            interval_minutes,
+            block_time,
+            now,
+        ));
     }
 
     choose_interval_minutes(block_time, now).ok_or_else(|| {
@@ -589,6 +636,38 @@ mod tests {
             .expect("interval");
 
         assert_eq!(interval_minutes, 15);
+    }
+
+    #[test]
+    fn rejects_cli_candle_override_when_transaction_is_too_old() {
+        let err = choose_candle_interval(Some(60), None, 1_000, 1_000 + 40 * 24 * 60 * 60)
+            .expect_err("interval should be rejected");
+
+        assert!(err.to_string().contains("too old for --candle=60"));
+        assert!(err.to_string().contains("use 240 minutes or larger"));
+    }
+
+    #[test]
+    fn rejects_default_candle_minutes_when_transaction_is_too_old() {
+        let err = choose_candle_interval(None, Some(60), 1_000, 1_000 + 40 * 24 * 60 * 60)
+            .expect_err("interval should be rejected");
+
+        assert!(
+            err.to_string()
+                .contains("too old for DEFAULT_CANDLE_MINUTES=60")
+        );
+        assert!(err.to_string().contains("use 240 minutes or larger"));
+    }
+
+    #[test]
+    fn rejects_requested_interval_when_transaction_is_too_old_for_all_supported_candles() {
+        let err = choose_candle_interval(Some(1_440), None, 1_000, 1_000 + 800 * 24 * 60 * 60)
+            .expect_err("interval should be rejected");
+
+        assert!(
+            err.to_string()
+                .contains("too old for Kraken OHLC history with candles up to 1d")
+        );
     }
 
     #[test]
