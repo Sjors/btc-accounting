@@ -85,6 +85,10 @@ transaction_age <= 720 * interval_minutes * 60
 
 If the transaction is too old to fit inside Kraken's `1d` candle retention window, the tool exits with an error instead of silently switching to a coarser interval.
 
+## License
+
+Licensed under the MIT License. See `LICENSE` for details.
+
 ## Project layout
 
 - `src/main.rs` — top-level command dispatcher
