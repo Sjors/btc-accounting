@@ -68,7 +68,7 @@ mod tests {
         assert_eq!(
             command,
             Command::ReceivedValue(ReceivedValueArgs {
-                address: "bc1qexample".to_owned(),
+                address: Some("bc1qexample".to_owned()),
                 candle_override_minutes: Some(60),
                 locale_override: Some(parse_output_locale("nl-NL", "--locale").expect("locale")),
             })

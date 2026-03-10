@@ -45,8 +45,24 @@ If a Tor-backed Kraken request fails, the tool prompts to retry through Tor, fal
 ## Run
 
 ```bash
-cargo run -- received-value bc1q8v4suzh0xvf86f2jqf47aer984qx7c5y3dkr60
+cargo run -- received-value bc1p...
 ```
+
+When called without a Bitcoin address, an interactive session prompts for the address, fetches the transaction, then offers only the candle intervals that are available given the transaction age:
+
+```bash
+cargo run -- received-value
+```
+
+```text
+Bitcoin address: bc1p...
+Fetching transaction…
+Confirmed at 2026-03-03T12:16:21+01:00
+Candle interval in minutes (15, 30, 60, 240, 1440) [15]:
+Locale [en-US]:
+```
+
+Prompts are printed to stderr; the structured output goes to stdout as usual.
 
 Example output:
 

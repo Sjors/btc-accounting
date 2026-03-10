@@ -35,6 +35,12 @@ impl OutputLocale {
     }
 }
 
+impl std::fmt::Display for OutputLocale {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 pub(crate) fn build_http_client(kind: &str, proxy_url: Option<&str>) -> Result<Client> {
     let mut builder = Client::builder().user_agent(concat!(
         env!("CARGO_PKG_NAME"),
@@ -212,6 +218,17 @@ pub(crate) fn choose_interval_minutes(block_time: i64, now: i64) -> Option<u32> 
         let retention_seconds = i64::from(*interval) * 60 * 720;
         age_seconds <= retention_seconds && *interval <= MAX_KRAKEN_INTERVAL_MINUTES
     })
+}
+
+pub(crate) fn available_candle_intervals(block_time: i64, now: i64) -> Vec<u32> {
+    let age_seconds = now.saturating_sub(block_time);
+    KRAKEN_INTERVALS_MINUTES
+        .into_iter()
+        .filter(|interval| {
+            let retention_seconds = i64::from(*interval) * 60 * 720;
+            age_seconds <= retention_seconds
+        })
+        .collect()
 }
 
 fn requested_interval_is_available(interval_minutes: u32, block_time: i64, now: i64) -> bool {
