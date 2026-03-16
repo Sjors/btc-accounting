@@ -15,7 +15,7 @@ jobs:
       - name: Install Bitcoin Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake pkgconf python3 libevent-dev libboost-dev ccache capnproto libcapnp-dev
+          sudo apt-get install -y build-essential cmake pkgconf python3 libevent-dev libboost-dev ccache capnproto libcapnp-dev libxml2-utils
       - name: ccache
         uses: actions/cache@v4
         with:
@@ -32,3 +32,5 @@ jobs:
           cmake --build build -j $(nproc) --target bitcoin bitcoin-node
       - name: Run Test Suite
         run: cargo test
+      - name: Validate CAMT.053 Fixture
+        run: xmllint --schema tests/fixtures/camt.053.001.02.xsd tests/fixtures/salary_2025_camt053.xml --noout

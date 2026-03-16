@@ -15,3 +15,13 @@ quick-xml = "0.37"
 reqwest = { version = "0.12.15", default-features = false, features = ["blocking", "json", "rustls-tls", "socks"] }
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
+
+[dev-dependencies]
+bitcoin-capnp-types = { git = "https://github.com/2140-dev/bitcoin-capnp-types" }
+capnp = "0.25.0"
+capnp-rpc = "0.25.0"
+futures = "0.3"
+rand = "0.9"
+tempfile = "3"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "io-util", "time"] }
+tokio-util = { version = "0.7", features = ["compat"] }

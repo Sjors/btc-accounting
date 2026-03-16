@@ -61,6 +61,19 @@ The integration test (`cargo test --test regtest`) does the following:
 5. Exports a CAMT.053 XML statement and verifies it via roundtrip reconstruction.
 6. Saves the output to `tests/fixtures/salary_2025_camt053.xml`.
 
+### CAMT.053 schema fixture
+
+The file `tests/fixtures/camt.053.001.02.xsd` is a vendored copy of the
+official CAMT.053.001.02 XML Schema used to validate the generated XML fixture.
+It is checked into the repository to avoid a network fetch in CI.
+
+CI validates `tests/fixtures/salary_2025_camt053.xml` against that schema with:
+
+```bash
+xmllint --schema tests/fixtures/camt.053.001.02.xsd \
+  tests/fixtures/salary_2025_camt053.xml --noout
+```
+
 ### Deterministic blocks
 
 All blocks are mined via Bitcoin Core's Cap'n Proto IPC interface. The test
