@@ -5,8 +5,9 @@ use dotenvy::dotenv;
 
 use btc_fiat_value::commands::export::{self as export_cmd, ExportArgs};
 use btc_fiat_value::commands::received_value::{self, ReceivedValueArgs};
+use btc_fiat_value::commands::reconstruct::{self as reconstruct_cmd, ReconstructArgs};
 
-const ROOT_USAGE: &str = "usage: btc_fiat_value <command> [options]\n\nsubcommands:\n  received-value  find the quote-currency value when BTC was received\n  export          export wallet transactions to accounting format";
+const ROOT_USAGE: &str = "usage: btc_fiat_value <command> [options]\n\nsubcommands:\n  received-value  find the quote-currency value when BTC was received\n  export          export wallet transactions to accounting format\n  reconstruct     verify an export by reconstructing the wallet";
 
 fn main() {
     if let Err(err) = run() {
@@ -20,6 +21,7 @@ fn run() -> Result<()> {
     match parse_command()? {
         Command::ReceivedValue(args) => received_value::run(args),
         Command::Export(args) => export_cmd::run(args),
+        Command::Reconstruct(args) => reconstruct_cmd::run(args),
     }
 }
 
@@ -27,6 +29,7 @@ fn run() -> Result<()> {
 enum Command {
     ReceivedValue(ReceivedValueArgs),
     Export(ExportArgs),
+    Reconstruct(ReconstructArgs),
 }
 
 fn parse_command() -> Result<Command> {
@@ -46,6 +49,9 @@ where
         )),
         export_cmd::SUBCOMMAND_NAME => Ok(Command::Export(
             export_cmd::parse_args_from(args, export_cmd::USAGE)?,
+        )),
+        reconstruct_cmd::SUBCOMMAND_NAME => Ok(Command::Reconstruct(
+            reconstruct_cmd::parse_args_from(args, reconstruct_cmd::USAGE)?,
         )),
         "-h" | "--help" | "help" => bail!(ROOT_USAGE),
         _ => bail!(ROOT_USAGE),
@@ -98,6 +104,27 @@ mod tests {
                 assert!(args.fiat_mode);
             }
             _ => panic!("expected Export"),
+        }
+    }
+
+    #[test]
+    fn parses_reconstruct_subcommand() {
+        let command = parse_command_from(vec![
+            "reconstruct".to_owned(),
+            "--input".to_owned(),
+            "statement.xml".to_owned(),
+            "--chain".to_owned(),
+            "regtest".to_owned(),
+        ])
+        .expect("command");
+
+        match command {
+            Command::Reconstruct(args) => {
+                assert_eq!(args.input.to_str().unwrap(), "statement.xml");
+                assert_eq!(args.chain, "regtest");
+                assert!(args.wallet.is_none());
+            }
+            _ => panic!("expected Reconstruct"),
         }
     }
 }
