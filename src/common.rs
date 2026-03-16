@@ -1,6 +1,7 @@
 use std::env;
-use std::str::FromStr;
 use std::io::{self, IsTerminal, Write};
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -212,6 +213,21 @@ pub fn supported_candle_intervals() -> String {
         .map(u32::to_string)
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+pub fn default_bitcoin_datadir() -> PathBuf {
+    let home = env::var("HOME").unwrap_or_else(|_| ".".to_owned());
+    default_bitcoin_datadir_from_home(Path::new(&home))
+}
+
+pub fn default_bitcoin_datadir_from_home(home: &Path) -> PathBuf {
+    if cfg!(target_os = "macos") {
+        home.join("Library")
+            .join("Application Support")
+            .join("Bitcoin")
+    } else {
+        home.join(".bitcoin")
+    }
 }
 
 fn parse_default_candle_minutes(value: Option<String>) -> Result<Option<u32>> {
@@ -597,7 +613,7 @@ pub struct ReceiveTransaction {
     pub block_time: Option<i64>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Candle {
     pub time: i64,
     pub vwap: f64,
@@ -648,13 +664,28 @@ struct KrakenOhlcResponse {
 mod tests {
     use chrono::FixedOffset;
     use serde_json::json;
+    use std::path::Path;
 
     use super::{
         AppConfig, Candle, FallbackChoice, choose_candle_interval, choose_interval_minutes,
-        format_local_timestamp, format_number, format_quote_value, format_timestamp_in_timezone,
-        parse_candle_interval_minutes, parse_candle_row, parse_fallback_choice,
-        parse_output_locale, quote_value_prefix,
+        default_bitcoin_datadir_from_home, format_local_timestamp, format_number,
+        format_quote_value, format_timestamp_in_timezone, parse_candle_interval_minutes,
+        parse_candle_row, parse_fallback_choice, parse_output_locale, quote_value_prefix,
     };
+
+    #[test]
+    fn uses_platform_default_bitcoin_datadir() {
+        let home = Path::new("/tmp/alice");
+        let expected = if cfg!(target_os = "macos") {
+            home.join("Library")
+                .join("Application Support")
+                .join("Bitcoin")
+        } else {
+            home.join(".bitcoin")
+        };
+
+        assert_eq!(default_bitcoin_datadir_from_home(home), expected);
+    }
 
     #[test]
     fn chooses_smallest_interval_that_covers_age() {
