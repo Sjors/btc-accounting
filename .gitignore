@@ -1,2 +1,8 @@
 .env
+.cache/
 target/
+AGENTS.md
+
+# Symlink to Bitcoin Core
+bitcoin-core
+
