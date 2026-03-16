@@ -14,6 +14,25 @@ use reqwest::blocking::Client;
 use serde::Deserialize;
 use serde_json::Value;
 
+/// Returned when Kraken signals rate limiting (HTTP 429 or JSON error).
+#[derive(Debug)]
+pub struct RateLimitedError {
+    /// Server-suggested wait time from the Retry-After header, if present.
+    pub retry_after_secs: Option<u64>,
+}
+
+impl std::fmt::Display for RateLimitedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Kraken rate limit exceeded")?;
+        if let Some(secs) = self.retry_after_secs {
+            write!(f, " (retry after {secs}s)")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for RateLimitedError {}
+
 const DEFAULT_MEMPOOL_BASE_URL: &str = "https://mempool.space";
 const KRAKEN_BASE_URL: &str = "https://api.kraken.com";
 const DEFAULT_KRAKEN_PAIR: &str = "XXBTZUSD";
@@ -387,7 +406,19 @@ pub fn fetch_candle_for_timestamp(
     let response = client
         .get(&url)
         .send()
-        .with_context(|| format!("failed to query Kraken at {url}"))?
+        .with_context(|| format!("failed to query Kraken at {url}"))?;
+
+    // Handle HTTP 429 with optional Retry-After header
+    if response.status() == StatusCode::TOO_MANY_REQUESTS {
+        let retry_after_secs = response
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<u64>().ok());
+        return Err(anyhow::Error::new(RateLimitedError { retry_after_secs }));
+    }
+
+    let response = response
         .error_for_status()
         .with_context(|| format!("Kraken returned an error for {url}"))?;
 
@@ -396,6 +427,9 @@ pub fn fetch_candle_for_timestamp(
         .with_context(|| format!("failed to decode Kraken response from {url}"))?;
 
     if !payload.error.is_empty() {
+        if payload.error.iter().any(|e| e.contains("Too many requests")) {
+            return Err(anyhow::Error::new(RateLimitedError { retry_after_secs: None }));
+        }
         bail!("Kraken API returned errors: {}", payload.error.join(", "));
     }
 
