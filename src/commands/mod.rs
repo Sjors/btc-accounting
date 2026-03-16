@@ -1,1 +1,1 @@
-pub(crate) mod received_value;
+pub mod received_value;

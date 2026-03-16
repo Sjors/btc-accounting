@@ -1,13 +1,11 @@
 use std::env;
 
 use anyhow::{Result, anyhow, bail};
+use dotenvy::dotenv;
 
-mod commands;
-mod common;
+use btc_fiat_value::commands::received_value::{self, ReceivedValueArgs};
 
-use commands::received_value::{self, ReceivedValueArgs};
-
-const ROOT_USAGE: &str = "usage: btc_eur_value received-value [--candle <minutes>] [--locale <tag>] <bitcoin-address>\n\nsubcommands:\n  received-value  find the quote-currency value when BTC was received";
+const ROOT_USAGE: &str = "usage: btc_fiat_value received-value [--candle <minutes>] [--locale <tag>] <bitcoin-address>\n\nsubcommands:\n  received-value  find the quote-currency value when BTC was received";
 
 fn main() {
     if let Err(err) = run() {
@@ -17,6 +15,7 @@ fn main() {
 }
 
 fn run() -> Result<()> {
+    let _ = dotenv();
     match parse_command()? {
         Command::ReceivedValue(args) => received_value::run(args),
     }
@@ -50,8 +49,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::{Command, parse_command_from};
-    use crate::common::parse_output_locale;
-    use crate::commands::received_value::ReceivedValueArgs;
+    use btc_fiat_value::common::parse_output_locale;
+    use btc_fiat_value::commands::received_value::ReceivedValueArgs;
 
     #[test]
     fn parses_received_value_subcommand() {

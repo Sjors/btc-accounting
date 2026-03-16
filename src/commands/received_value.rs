@@ -1,7 +1,6 @@
 use std::io::{self, IsTerminal, Write};
 
 use anyhow::{Context, Result, anyhow, bail};
-use dotenvy::dotenv;
 
 use crate::common::{
     AppConfig, build_http_client, available_candle_intervals, choose_candle_interval,
@@ -11,19 +10,18 @@ use crate::common::{
     OutputLocale,
 };
 
-pub(crate) const SUBCOMMAND_NAME: &str = "received-value";
-pub(crate) const USAGE: &str =
-    "usage: btc_eur_value received-value [--candle <minutes>] [--locale <tag>] <bitcoin-address>";
+pub const SUBCOMMAND_NAME: &str = "received-value";
+pub const USAGE: &str =
+    "usage: btc_fiat_value received-value [--candle <minutes>] [--locale <tag>] <bitcoin-address>";
 
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) struct ReceivedValueArgs {
-    pub(crate) address: Option<String>,
-    pub(crate) candle_override_minutes: Option<u32>,
-    pub(crate) locale_override: Option<OutputLocale>,
+pub struct ReceivedValueArgs {
+    pub address: Option<String>,
+    pub candle_override_minutes: Option<u32>,
+    pub locale_override: Option<OutputLocale>,
 }
 
-pub(crate) fn run(args: ReceivedValueArgs) -> Result<()> {
-    let _ = dotenv();
+pub fn run(args: ReceivedValueArgs) -> Result<()> {
     let config = AppConfig::from_env()?;
 
     let address = match args.address {
@@ -214,7 +212,7 @@ fn prompt_with_default(label: &str, default: &str) -> Result<String> {
     }
 }
 
-pub(crate) fn parse_args_from<I>(args: I, usage: &str) -> Result<ReceivedValueArgs>
+pub fn parse_args_from<I>(args: I, usage: &str) -> Result<ReceivedValueArgs>
 where
     I: IntoIterator<Item = String>,
 {
@@ -278,7 +276,7 @@ mod tests {
     fn parses_args_without_candle_override() {
         let args = parse_args_from(
             vec!["bc1qexample".to_owned()],
-            "usage: btc_eur_value received-value [--candle <minutes>] [--locale <tag>] <bitcoin-address>",
+            "usage: btc_fiat_value received-value [--candle <minutes>] [--locale <tag>] <bitcoin-address>",
         )
         .expect("args");
 
@@ -300,7 +298,7 @@ mod tests {
                 "60".to_owned(),
                 "bc1qexample".to_owned(),
             ],
-            "usage: btc_eur_value received-value [--candle <minutes>] [--locale <tag>] <bitcoin-address>",
+            "usage: btc_fiat_value received-value [--candle <minutes>] [--locale <tag>] <bitcoin-address>",
         )
         .expect("args");
 
@@ -318,7 +316,7 @@ mod tests {
     fn parses_args_with_equals_style_candle_override() {
         let args = parse_args_from(
             vec!["bc1qexample".to_owned(), "--candle=240".to_owned()],
-            "usage: btc_eur_value received-value [--candle <minutes>] [--locale <tag>] <bitcoin-address>",
+            "usage: btc_fiat_value received-value [--candle <minutes>] [--locale <tag>] <bitcoin-address>",
         )
         .expect("args");
 
@@ -340,7 +338,7 @@ mod tests {
                 "nl-NL".to_owned(),
                 "bc1qexample".to_owned(),
             ],
-            "usage: btc_eur_value received-value [--candle <minutes>] [--locale <tag>] <bitcoin-address>",
+            "usage: btc_fiat_value received-value [--candle <minutes>] [--locale <tag>] <bitcoin-address>",
         )
         .expect("args");
 
@@ -358,7 +356,7 @@ mod tests {
     fn parses_args_with_equals_style_locale_override() {
         let args = parse_args_from(
             vec!["bc1qexample".to_owned(), "--locale=de-DE".to_owned()],
-            "usage: btc_eur_value received-value [--candle <minutes>] [--locale <tag>] <bitcoin-address>",
+            "usage: btc_fiat_value received-value [--candle <minutes>] [--locale <tag>] <bitcoin-address>",
         )
         .expect("args");
 

@@ -19,10 +19,10 @@ const KRAKEN_BASE_URL: &str = "https://api.kraken.com";
 const DEFAULT_KRAKEN_PAIR: &str = "XXBTZUSD";
 const DEFAULT_LOCALE: &str = "en-US";
 const MAX_KRAKEN_INTERVAL_MINUTES: u32 = 1_440;
-pub(crate) const KRAKEN_INTERVALS_MINUTES: [u32; 7] = [1, 5, 15, 30, 60, 240, 1_440];
+pub const KRAKEN_INTERVALS_MINUTES: [u32; 7] = [1, 5, 15, 30, 60, 240, 1_440];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct OutputLocale(Locale);
+pub struct OutputLocale(Locale);
 
 impl OutputLocale {
     fn decimal_formatter(&self) -> Result<DecimalFormatter> {
@@ -41,7 +41,7 @@ impl std::fmt::Display for OutputLocale {
     }
 }
 
-pub(crate) fn build_http_client(kind: &str, proxy_url: Option<&str>) -> Result<Client> {
+pub fn build_http_client(kind: &str, proxy_url: Option<&str>) -> Result<Client> {
     let mut builder = Client::builder().user_agent(concat!(
         env!("CARGO_PKG_NAME"),
         "/",
@@ -57,7 +57,7 @@ pub(crate) fn build_http_client(kind: &str, proxy_url: Option<&str>) -> Result<C
         .with_context(|| format!("failed to build {kind} HTTP client"))
 }
 
-pub(crate) fn fetch_kraken_candle_with_fallback(
+pub fn fetch_kraken_candle_with_fallback(
     tor_client: &Client,
     clearnet_client: &Client,
     config: &AppConfig,
@@ -156,7 +156,7 @@ fn parse_fallback_choice(input: &str) -> Option<FallbackChoice> {
     }
 }
 
-pub(crate) fn parse_candle_interval_minutes(value: &str, name: &str) -> Result<u32> {
+pub fn parse_candle_interval_minutes(value: &str, name: &str) -> Result<u32> {
     let interval_minutes = value
         .parse::<u32>()
         .with_context(|| format!("invalid {name} value: {value}"))?;
@@ -171,7 +171,7 @@ pub(crate) fn parse_candle_interval_minutes(value: &str, name: &str) -> Result<u
     }
 }
 
-pub(crate) fn parse_output_locale(value: &str, name: &str) -> Result<OutputLocale> {
+pub fn parse_output_locale(value: &str, name: &str) -> Result<OutputLocale> {
     let trimmed = value.trim();
 
     if trimmed.is_empty() {
@@ -187,7 +187,7 @@ pub(crate) fn parse_output_locale(value: &str, name: &str) -> Result<OutputLocal
     Ok(OutputLocale(locale))
 }
 
-pub(crate) fn supported_candle_intervals() -> String {
+pub fn supported_candle_intervals() -> String {
     KRAKEN_INTERVALS_MINUTES
         .iter()
         .map(u32::to_string)
@@ -205,14 +205,14 @@ fn parse_default_candle_minutes(value: Option<String>) -> Result<Option<u32>> {
     }
 }
 
-pub(crate) fn current_unix_timestamp() -> Result<i64> {
+pub fn current_unix_timestamp() -> Result<i64> {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .context("system clock is before the unix epoch")?;
     i64::try_from(now.as_secs()).context("current timestamp does not fit in i64")
 }
 
-pub(crate) fn choose_interval_minutes(block_time: i64, now: i64) -> Option<u32> {
+pub fn choose_interval_minutes(block_time: i64, now: i64) -> Option<u32> {
     let age_seconds = now.saturating_sub(block_time);
     KRAKEN_INTERVALS_MINUTES.into_iter().find(|interval| {
         let retention_seconds = i64::from(*interval) * 60 * 720;
@@ -220,7 +220,7 @@ pub(crate) fn choose_interval_minutes(block_time: i64, now: i64) -> Option<u32> 
     })
 }
 
-pub(crate) fn available_candle_intervals(block_time: i64, now: i64) -> Vec<u32> {
+pub fn available_candle_intervals(block_time: i64, now: i64) -> Vec<u32> {
     let age_seconds = now.saturating_sub(block_time);
     KRAKEN_INTERVALS_MINUTES
         .into_iter()
@@ -256,7 +256,7 @@ fn requested_interval_too_old_error(
     }
 }
 
-pub(crate) fn choose_candle_interval(
+pub fn choose_candle_interval(
     candle_override_minutes: Option<u32>,
     default_candle_minutes: Option<u32>,
     block_time: i64,
@@ -296,7 +296,7 @@ pub(crate) fn choose_candle_interval(
     })
 }
 
-pub(crate) fn find_unique_receive_transaction(
+pub fn find_unique_receive_transaction(
     client: &Client,
     config: &AppConfig,
     address: &str,
@@ -370,7 +370,7 @@ fn fetch_address_transactions_page(
         .with_context(|| format!("failed to decode mempool.space response from {url}"))
 }
 
-pub(crate) fn fetch_candle_for_timestamp(
+pub fn fetch_candle_for_timestamp(
     client: &Client,
     config: &AppConfig,
     timestamp: i64,
@@ -439,11 +439,11 @@ fn parse_json_number(value: &Value) -> Option<f64> {
         .or_else(|| value.as_f64())
 }
 
-pub(crate) fn sats_to_btc(sats: u64) -> f64 {
+pub fn sats_to_btc(sats: u64) -> f64 {
     sats as f64 / 100_000_000.0
 }
 
-pub(crate) fn format_number(value: f64, precision: usize, locale: &OutputLocale) -> Result<String> {
+pub fn format_number(value: f64, precision: usize, locale: &OutputLocale) -> Result<String> {
     let formatted = format!("{value:.precision$}");
     let decimal = FixedDecimal::from_str(&formatted)
         .with_context(|| format!("failed to parse formatted decimal value: {formatted}"))?;
@@ -452,7 +452,7 @@ pub(crate) fn format_number(value: f64, precision: usize, locale: &OutputLocale)
     Ok(formatter.format(&decimal).to_string())
 }
 
-pub(crate) fn format_local_timestamp(timestamp: i64) -> String {
+pub fn format_local_timestamp(timestamp: i64) -> String {
     format_timestamp_in_timezone(timestamp, &Local)
 }
 
@@ -466,7 +466,7 @@ where
         .unwrap_or_else(|| format!("unix:{timestamp}"))
 }
 
-pub(crate) fn format_quote_value(
+pub fn format_quote_value(
     kraken_pair: &str,
     value: f64,
     locale: &OutputLocale,
@@ -478,7 +478,7 @@ pub(crate) fn format_quote_value(
     ))
 }
 
-pub(crate) fn quote_value_prefix(kraken_pair: &str) -> String {
+pub fn quote_value_prefix(kraken_pair: &str) -> String {
     match quote_currency_code(kraken_pair) {
         Some("EUR") => "€".to_owned(),
         Some("USD") | Some("CAD") | Some("AUD") | Some("NZD") => "$".to_owned(),
@@ -494,24 +494,24 @@ fn quote_currency_code(kraken_pair: &str) -> Option<&str> {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct AppConfig {
-    pub(crate) mempool_base_url: String,
-    pub(crate) kraken_pair: String,
-    pub(crate) default_candle_minutes: Option<u32>,
-    pub(crate) locale: OutputLocale,
+pub struct AppConfig {
+    pub mempool_base_url: String,
+    pub kraken_pair: String,
+    pub default_candle_minutes: Option<u32>,
+    pub locale: OutputLocale,
     socks_proxy_url: Option<String>,
 }
 
 impl AppConfig {
-    pub(crate) fn from_env() -> Result<Self> {
+    pub fn from_env() -> Result<Self> {
         Self::from_env_values(|name| env::var(name).ok())
     }
 
-    pub(crate) fn kraken_proxy_url(&self) -> Option<&str> {
+    pub fn kraken_proxy_url(&self) -> Option<&str> {
         self.socks_proxy_url.as_deref()
     }
 
-    pub(crate) fn mempool_proxy_url(&self) -> Option<&str> {
+    pub fn mempool_proxy_url(&self) -> Option<&str> {
         match (
             self.uses_default_mempool_base_url(),
             self.socks_proxy_url.as_deref(),
@@ -525,7 +525,7 @@ impl AppConfig {
         self.mempool_base_url == DEFAULT_MEMPOOL_BASE_URL
     }
 
-    pub(crate) fn from_env_values<F>(mut get_env: F) -> Result<Self>
+    pub fn from_env_values<F>(mut get_env: F) -> Result<Self>
     where
         F: FnMut(&str) -> Option<String>,
     {
@@ -557,16 +557,16 @@ fn env_optional(value: Option<String>) -> Option<String> {
 }
 
 #[derive(Debug)]
-pub(crate) struct ReceiveTransaction {
-    pub(crate) txid: String,
-    pub(crate) received_sats: u64,
-    pub(crate) block_time: Option<i64>,
+pub struct ReceiveTransaction {
+    pub txid: String,
+    pub received_sats: u64,
+    pub block_time: Option<i64>,
 }
 
 #[derive(Debug)]
-pub(crate) struct Candle {
-    pub(crate) time: i64,
-    pub(crate) vwap: f64,
+pub struct Candle {
+    pub time: i64,
+    pub vwap: f64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
