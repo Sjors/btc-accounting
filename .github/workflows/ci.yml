@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Install Bitcoin Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkgconf python3 libevent-dev libboost-dev ccache capnproto libcapnp-dev
+      - name: ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-${{ runner.os }}-${{ github.sha }}
+          restore-keys: ccache-${{ runner.os }}-
+      - name: Checkout Bitcoin Core
+        run: git clone --depth 1 --branch master https://github.com/bitcoin/bitcoin.git bitcoin-core
+      - name: Build Bitcoin Core
+        run: |
+          cd bitcoin-core
+          git apply ../bitcoin-core-ipc-extranonce.patch
+          cmake -B build -DENABLE_WALLET=ON -DENABLE_IPC=ON -DBUILD_TESTS=OFF -DBUILD_BENCH=OFF -DBUILD_TX=OFF -DBUILD_UTIL=OFF -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          cmake --build build -j $(nproc) --target bitcoin bitcoin-node
+      - name: Run Test Suite
+        run: cargo test

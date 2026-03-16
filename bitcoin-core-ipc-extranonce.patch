@@ -1,0 +1,21 @@
+diff --git a/src/node/interfaces.cpp b/src/node/interfaces.cpp
+index 84fd5bb794..6fc664174b 100644
+--- a/src/node/interfaces.cpp
++++ b/src/node/interfaces.cpp
+@@ -988,10 +988,16 @@ public:
+             // Also wait during the final catch-up moments after IBD.
+             if (!CooldownIfHeadersAhead(chainman(), notifications(), *maybe_tip, m_interrupt_mining)) return {};
+         }
+ 
+         BlockAssembler::Options assemble_options{options};
++        // At heights <= 16 the BIP34 height push is only 1 byte, but consensus
++        // requires coinbase scriptSig to be >= 2 bytes (bad-cb-length). Pad with
++        // a dummy OP_0 extranonce so createNewBlock succeeds at these heights.
++        if (WITH_LOCK(chainman().GetMutex(), return chainman().ActiveChain().Height()) < 16) {
++            assemble_options.include_dummy_extranonce = true;
++        }
+         ApplyArgsManOptions(*Assert(m_node.args), assemble_options);
+         return std::make_unique<BlockTemplateImpl>(assemble_options, BlockAssembler{chainman().ActiveChainstate(), context()->mempool.get(), assemble_options}.CreateNewBlock(), m_node);
+     }
+ 
+     void interrupt() override
