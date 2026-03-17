@@ -20,6 +20,16 @@ The command works as follows:
 
 ### `export`
 
+<p>
+  <img src="doc/core.png" alt="Bitcoin Core wallet" /><br />
+  <sub>Bitcoin Core wallet</sub>
+</p>
+
+<p>
+  <img src="doc/accounting.png" alt="Fiat accounting software" width="75%" /><br />
+  <sub>Fiat accounting software</sub>
+</p>
+
 Export wallet transactions to CAMT.053 accounting format.
 
 Reads transactions from a Bitcoin Core wallet via JSON-RPC, converts them to a CAMT.053 XML bank statement. Supports fiat conversion at spot rates and mark-to-market year-end reconciliation. If the output file already exists, new transactions are appended (deduplication by entry reference).
