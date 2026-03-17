@@ -54,6 +54,16 @@ Mining fees are separate debit entries with `:fee` as the vout component:
 
 Only one fee entry is emitted per transaction, even if the transaction has multiple outputs in the wallet.
 
+#### FIFO realized gain/loss entries
+
+With `--fiat-mode --fifo`, the export emits additional virtual entries for realized gains or losses on sends:
+
+- `<NtryRef>`: `:fifo:<height>:<txid_prefix>:<vout>`
+- `<AddtlNtryInf>`: `:fifo:<height>:<txid_prefix>:<vout>`
+- Description: `FIFO realized gain <CCY><amount>` or `FIFO realized loss <CCY><amount>`
+
+These entries adjust the fiat balance from spot-value booking to FIFO cost basis. Fees also consume FIFO lots, but do not produce separate `:fifo:` entries.
+
 #### Mark-to-market entries
 
 Year-end reconciliation entries use the reference `:mtm:<year>-12-31` in both `<NtryRef>` and `<AddtlNtryInf>`.
@@ -62,7 +72,7 @@ Year-end reconciliation entries use the reference `:mtm:<year>-12-31` in both `<
 
 The export embeds watch-only (public key) descriptors as XML comments inside the `<Stmt>` element. Only descriptors whose derived addresses actually received coins are included. These allow reconstructing a watch-only wallet for auditing purposes.
 
-The descriptors contain `xpub`/`tpub` keys (never private keys), but revealing them has privacy implications — see the warning in the main [README](../../README.md).
+The descriptors contain `xpub`/`tpub` keys (never private keys), but revealing them has privacy implications. The main [README](../../README.md) documents the privacy warning alongside the `export` command.
 
 ### IBAN and BIC
 

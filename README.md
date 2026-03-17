@@ -32,7 +32,7 @@ The command works as follows:
 
 Export wallet transactions to CAMT.053 accounting format.
 
-Reads transactions from a Bitcoin Core wallet via JSON-RPC, converts them to a CAMT.053 XML bank statement. Supports fiat conversion at spot rates and mark-to-market year-end reconciliation. If the output file already exists, new transactions are appended (deduplication by entry reference).
+Reads transactions from a Bitcoin Core wallet via JSON-RPC, converts them to a CAMT.053 XML bank statement. Supports fiat conversion at spot rates, optional FIFO realized gain/loss entries, and mark-to-market year-end reconciliation. If the output file already exists, new transactions are appended (deduplication by entry reference).
 
 ```bash
 # Basic export to file
@@ -53,6 +53,7 @@ Key options:
 - `--wallet <name>` — Bitcoin Core wallet name (auto-detected if only one wallet is loaded)
 - `--chain <name>` — chain: main, testnet3, testnet4, signet, regtest (default: main)
 - `--fiat-mode` — convert BTC amounts to fiat at Kraken spot rates
+- `--fifo` — enable FIFO lot tracking for realized gains/losses in fiat mode
 - `--mark-to-market` — add year-end reconciliation entries (default on in fiat mode)
 - `--output <file>` — output file path (appends if file exists)
 - `--start-date <YYYY-MM-DD>` — only include transactions from this date
@@ -61,6 +62,8 @@ Key options:
 The IBAN in the output is generated deterministically from the wallet's master fingerprint. The bank code is `XBTC` on mainnet, `TBTC` on test networks. The BIC in the XML servicer field is derived from the IBAN (e.g. `XBTCNL2A`).
 
 The generated XML conforms to the CAMT.053.001.02 schema (ISO 20022) and validates against the official XSD. Each entry contains enough information to map back to the original Bitcoin transaction (block hash, txid, vout).
+
+When `--fifo` is enabled together with `--fiat-mode`, the export adds virtual `:fifo:` entries that book realized gains or losses based on FIFO lot tracking.
 
 See [src/export/README.md](src/export/README.md) for details on the CAMT.053 format, transaction mapping, and accounting software compatibility.
 
