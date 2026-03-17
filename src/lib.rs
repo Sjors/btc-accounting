@@ -1,3 +1,4 @@
+pub mod accounting;
 pub mod commands;
 pub mod common;
 pub mod exchange_rate;
