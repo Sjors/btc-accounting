@@ -6,30 +6,28 @@ on:
       - master
   pull_request:
 
+env:
+  BITCOIN_CORE_VERSION: '31.0rc1'
+
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - name: Install Bitcoin Dependencies
+      - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake pkgconf python3 libevent-dev libboost-dev ccache capnproto libcapnp-dev libxml2-utils
-      - name: ccache
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ccache
-          key: ccache-${{ runner.os }}-${{ github.sha }}
-          restore-keys: ccache-${{ runner.os }}-
-      - name: Checkout Bitcoin Core
-        run: git clone --depth 1 --branch master https://github.com/bitcoin/bitcoin.git bitcoin-core
-      - name: Build Bitcoin Core
+          sudo apt-get install -y capnproto libcapnp-dev libxml2-utils
+      - name: Download Bitcoin Core
         run: |
-          cd bitcoin-core
-          git apply ../bitcoin-core-ipc-extranonce.patch
-          cmake -B build -DENABLE_WALLET=ON -DENABLE_IPC=ON -DBUILD_TESTS=OFF -DBUILD_BENCH=OFF -DBUILD_TX=OFF -DBUILD_UTIL=OFF -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-          cmake --build build -j $(nproc) --target bitcoin bitcoin-node
+          VERSION="${BITCOIN_CORE_VERSION}"
+          SERIES="${VERSION%%rc*}"
+          RC="${VERSION##*rc}"
+          URL="https://bitcoincore.org/bin/bitcoin-core-${SERIES}/test.rc${RC}/bitcoin-${VERSION}-x86_64-linux-gnu.tar.gz"
+          curl -fsSLO "${URL}"
+          tar xzf "bitcoin-${VERSION}-x86_64-linux-gnu.tar.gz"
+          mv "bitcoin-${VERSION}" bitcoin-core
       - name: Run Test Suite
         run: cargo test
       - name: Validate CAMT.053 Fixture

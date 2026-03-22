@@ -115,6 +115,15 @@ impl RegtestNode {
         self.datadir.path().join("regtest").join("node.sock")
     }
 
+    /// Mine blocks via RPC `generatetoaddress` (used for early heights where
+    /// IPC `createNewBlock` would fail without the extranonce patch).
+    pub fn generate_to_address(&self, nblocks: u32, address: &str) -> Result<Vec<String>> {
+        self.rpc_call("generatetoaddress", &[
+            serde_json::json!(nblocks),
+            serde_json::json!(address),
+        ])
+    }
+
     pub fn set_mocktime(&self, timestamp: i64) -> Result<()> {
         self.rpc_call::<serde_json::Value>("setmocktime", &[serde_json::json!(timestamp)])?;
         Ok(())
@@ -190,24 +199,34 @@ fn find_available_port() -> Result<u16> {
 
 /// Find a pre-built `bitcoin` wrapper binary.
 ///
-/// Checks bitcoin-core/build/bin/bitcoin (cmake output layout).
-/// Build the `bitcoin` and `bitcoin-node` targets first — see CI or README.
+/// Checks two layouts:
+///   1. bitcoin-core/bin/bitcoin   — downloaded release tarball
+///   2. bitcoin-core/build/bin/bitcoin — cmake build from source
+///
+/// See DEVELOP.md for setup instructions.
 pub fn find_bitcoin() -> Result<PathBuf> {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let source_dir = manifest_dir.join("bitcoin-core");
-    let build_dir = source_dir.join("build");
-    let bitcoin = build_dir.join("bin").join("bitcoin");
 
-    if bitcoin.exists() {
-        return Ok(bitcoin);
+    // Downloaded binary layout: bitcoin-core/bin/bitcoin
+    let downloaded = source_dir.join("bin").join("bitcoin");
+    if downloaded.exists() {
+        return Ok(downloaded);
+    }
+
+    // Built-from-source layout: bitcoin-core/build/bin/bitcoin
+    let built = source_dir.join("build").join("bin").join("bitcoin");
+    if built.exists() {
+        return Ok(built);
     }
 
     bail!(
-        "bitcoin not found at {}.\n\
-         Build it first:\n  \
-         cd bitcoin-core\n  \
-         cmake -B build -DENABLE_WALLET=ON -DBUILD_TESTS=OFF -DBUILD_BENCH=OFF\n  \
-         cmake --build build -j$(nproc) --target bitcoin bitcoin-node",
-        bitcoin.display()
+        "bitcoin not found.\n\
+         Download binaries or build from source — see DEVELOP.md.\n\
+         Checked:\n  \
+         {}\n  \
+         {}",
+        downloaded.display(),
+        built.display()
     );
 }
