@@ -117,6 +117,8 @@ impl RegtestNode {
 
     /// Mine blocks via RPC `generatetoaddress` (used for early heights where
     /// IPC `createNewBlock` would fail without the extranonce patch).
+    ///
+    /// Returns the block hashes of the generated blocks.
     pub fn generate_to_address(&self, nblocks: u32, address: &str) -> Result<Vec<String>> {
         self.rpc_call("generatetoaddress", &[
             serde_json::json!(nblocks),
