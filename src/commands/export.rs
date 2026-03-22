@@ -32,10 +32,10 @@ options:
   --fifo                Use FIFO lot tracking for realized gains (env: FIFO)
   --start-date <date>   Start date YYYY-MM-DD
   --bank-name <name>    Bank/institution name (default: Bitcoin Core - <wallet>)
-  --candle <minutes>    Kraken candle interval
+  --candle <minutes>    Kraken candle interval (default: DEFAULT_CANDLE_MINUTES or 1440)
   --ignore-balance-mismatch  Warn instead of error on forward/backward balance mismatch";
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct ExportArgs {
     pub wallet: Option<String>,
     pub country: String,
@@ -47,12 +47,12 @@ pub struct ExportArgs {
     pub fifo: bool,
     pub start_date: Option<NaiveDate>,
     pub output: PathBuf,
-    pub candle_minutes: u32,
+    pub candle_override_minutes: Option<u32>,
     pub bank_name: Option<String>,
     pub ignore_balance_mismatch: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum ExportFormat {
     Camt053,
 }
@@ -91,6 +91,10 @@ pub fn run(args: ExportArgs) -> Result<()> {
     let descriptors = rpc.get_receive_descriptors(&receive_addresses)?;
 
     let app_config = AppConfig::from_env()?;
+    let candle_minutes = resolve_candle_minutes(
+        args.candle_override_minutes,
+        app_config.default_candle_minutes,
+    );
     let provider = KrakenProvider::new(&app_config)?;
 
     let currency = if args.fiat_mode {
@@ -141,7 +145,7 @@ pub fn run(args: ExportArgs) -> Result<()> {
         fifo: args.fifo,
         currency: currency.clone(),
         account_iban: iban,
-        candle_interval_minutes: args.candle_minutes,
+        candle_interval_minutes: candle_minutes,
         start_date,
         opening_balance_cents,
         bank_name,
@@ -225,6 +229,12 @@ fn quote_currency_from_pair(pair: &str) -> String {
     } else {
         "USD".to_owned()
     }
+}
+
+fn resolve_candle_minutes(candle_override_minutes: Option<u32>, default_candle_minutes: Option<u32>) -> u32 {
+    candle_override_minutes
+        .or(default_candle_minutes)
+        .unwrap_or(1440)
 }
 
 pub fn parse_args_from<I>(args: I, usage: &str) -> Result<ExportArgs>
@@ -346,8 +356,6 @@ where
         .map(|v| v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
 
-    let candle_minutes = candle_minutes.unwrap_or(1440);
-
     Ok(ExportArgs {
         wallet,
         country,
@@ -359,8 +367,83 @@ where
         fifo: fifo || fifo_env,
         start_date,
         output,
-        candle_minutes,
+        candle_override_minutes: candle_minutes,
         bank_name,
         ignore_balance_mismatch,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ExportFormat, ExportArgs, USAGE, parse_args_from, resolve_candle_minutes};
+
+    #[test]
+    fn parses_export_args_without_candle_override() {
+        let args = parse_args_from(
+            vec![
+                "--country".to_owned(),
+                "NL".to_owned(),
+                "--wallet".to_owned(),
+                "test_wallet".to_owned(),
+                "--output".to_owned(),
+                "my-wallet.xml".to_owned(),
+            ],
+            USAGE,
+        )
+        .expect("args");
+
+        assert_eq!(
+            args,
+            ExportArgs {
+                wallet: Some("test_wallet".to_owned()),
+                country: "NL".to_owned(),
+                datadir: crate::common::default_bitcoin_datadir(),
+                chain: "main".to_owned(),
+                format: ExportFormat::Camt053,
+                fiat_mode: false,
+                mark_to_market: None,
+                fifo: false,
+                start_date: None,
+                output: "my-wallet.xml".into(),
+                candle_override_minutes: None,
+                bank_name: None,
+                ignore_balance_mismatch: false,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_export_args_with_candle_override() {
+        let args = parse_args_from(
+            vec![
+                "--country".to_owned(),
+                "NL".to_owned(),
+                "--wallet".to_owned(),
+                "test_wallet".to_owned(),
+                "--output".to_owned(),
+                "my-wallet.xml".to_owned(),
+                "--candle".to_owned(),
+                "60".to_owned(),
+            ],
+            USAGE,
+        )
+        .expect("args");
+
+        assert_eq!(args.candle_override_minutes, Some(60));
+    }
+
+    #[test]
+    fn export_uses_default_candle_minutes_when_present() {
+        assert_eq!(resolve_candle_minutes(None, Some(60)), 60);
+    }
+
+    #[test]
+    fn export_candle_override_beats_default_candle_minutes() {
+        assert_eq!(resolve_candle_minutes(Some(240), Some(60)), 240);
+    }
+
+    #[test]
+    fn export_defaults_to_daily_when_no_override_or_env_default_exists() {
+        assert_eq!(resolve_candle_minutes(None, None), 1440);
+    }
 }

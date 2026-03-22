@@ -46,6 +46,7 @@ Key options:
 - `--mark-to-market` — add year-end reconciliation entries (default on in fiat mode, can be combined with `--fifo`)
 - `--output <file>` — output file path (appends if file exists)
 - `--start-date <YYYY-MM-DD>` — only include transactions from this date
+- `--candle <minutes>` — Kraken candle interval (`DEFAULT_CANDLE_MINUTES` or `1440` by default)
 - `--datadir <path>` — Bitcoin Core data directory (for cookie auth)
 - `--chain <name>` — chain: main, testnet3, testnet4, signet, regtest (default: main)
 
