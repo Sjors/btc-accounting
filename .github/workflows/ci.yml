@@ -23,7 +23,7 @@ jobs:
           key: ccache-${{ runner.os }}-${{ github.sha }}
           restore-keys: ccache-${{ runner.os }}-
       - name: Checkout Bitcoin Core
-        run: git clone --depth 1 --branch master https://github.com/bitcoin/bitcoin.git bitcoin-core
+        run: git clone --depth 1 --branch v31.0rc1 https://github.com/bitcoin/bitcoin.git bitcoin-core
       - name: Build Bitcoin Core
         run: |
           cd bitcoin-core
