@@ -71,16 +71,11 @@ fn run_salary_scenario() -> Result<()> {
 
     // Generate initial blocks for maturity (100-block coinbase maturity + 1)
     let mining_addr = mining.get_new_address()?;
-    // Mine first 17 blocks via RPC (IPC createNewBlock fails at heights ≤ 16
-    // without the extranonce patch; the pre-built binary doesn't include it).
-    node.generate_to_address(17, &mining_addr)?;
-    // Mine remaining 84 blocks via IPC (prefix "ipc-maturity-" to distinguish
-    // from RPC-mined blocks which don't need caching)
-    let all_cached = mining.mine_blocks_ipc(84, &mining_addr, "ipc-maturity-", &mut coinbase_cache, &rt)?;
+    let all_cached = mining.mine_blocks_ipc(101, &mining_addr, "maturity-", &mut coinbase_cache, &rt)?;
     if !all_cached {
         eprintln!("⚠️  Cache miss during maturity blocks — output may not be deterministic");
     }
-    eprintln!("Mined 101 blocks to mining wallet (17 via RPC, 84 via IPC)");
+    eprintln!("Mined 101 blocks to mining wallet");
 
     // Send initial 0.001 BTC to accounting wallet as seed
     let accounting_addr = accounting.get_new_address()?;
