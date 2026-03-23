@@ -10,8 +10,8 @@ use reqwest::blocking::Client;
 
 use crate::common::{AppConfig, Candle, RateLimitedError, build_http_client, fetch_candle_for_timestamp};
 
-const CACHE_DIR: &str = ".cache";
-const CACHE_FILE: &str = "rates.json";
+pub const CACHE_DIR: &str = ".cache";
+pub const CACHE_FILE: &str = "rates.json";
 const REQUEST_DELAY: Duration = Duration::from_millis(1500);
 
 /// Provides VWAP exchange rates for a given timestamp.
@@ -37,7 +37,7 @@ impl KrakenProvider {
             .transpose()?;
         let clearnet_client = build_http_client("clearnet Kraken", None)?;
 
-        let disk_cache = Self::load_disk_cache();
+        let disk_cache = load_disk_cache();
 
         let initial_cache_size = disk_cache.len();
 
@@ -51,27 +51,9 @@ impl KrakenProvider {
         })
     }
 
-    fn cache_key(pair: &str, interval_minutes: u32, candle_start: i64) -> String {
-        format!("{pair}:{interval_minutes}:{candle_start}")
-    }
-
-    fn cache_path() -> PathBuf {
-        PathBuf::from(CACHE_DIR).join(CACHE_FILE)
-    }
-
-    fn load_disk_cache() -> HashMap<String, f64> {
-        let path = Self::cache_path();
-        fs::read_to_string(&path)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
-    }
-
     fn save_disk_cache(&self) {
         let Ok(cache) = self.cache.lock() else { return };
-        let Ok(json) = serde_json::to_string_pretty(&*cache) else { return };
-        let _ = fs::create_dir_all(CACHE_DIR);
-        let _ = fs::write(Self::cache_path(), json);
+        let _ = save_disk_cache(&cache);
     }
 
     /// Returns true if new entries were written to the disk cache.
@@ -120,7 +102,7 @@ impl ExchangeRateProvider for KrakenProvider {
     fn get_vwap(&self, timestamp: i64, interval_minutes: u32) -> Result<f64> {
         let interval_seconds = i64::from(interval_minutes) * 60;
         let candle_start = (timestamp / interval_seconds) * interval_seconds;
-        let key = Self::cache_key(&self.config.kraken_pair, interval_minutes, candle_start);
+        let key = cache_key(&self.config.kraken_pair, interval_minutes, candle_start);
 
         {
             let cache = self.cache.lock().map_err(|e| anyhow!("cache lock: {e}"))?;
@@ -140,6 +122,29 @@ impl ExchangeRateProvider for KrakenProvider {
 
         Ok(vwap)
     }
+}
+
+pub fn cache_key(pair: &str, interval_minutes: u32, candle_start: i64) -> String {
+    format!("{pair}:{interval_minutes}:{candle_start}")
+}
+
+pub fn cache_path() -> PathBuf {
+    PathBuf::from(CACHE_DIR).join(CACHE_FILE)
+}
+
+pub fn load_disk_cache() -> HashMap<String, f64> {
+    let path = cache_path();
+    fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+pub fn save_disk_cache(cache: &HashMap<String, f64>) -> Result<()> {
+    let json = serde_json::to_string_pretty(cache)?;
+    fs::create_dir_all(CACHE_DIR)?;
+    fs::write(cache_path(), json)?;
+    Ok(())
 }
 
 #[cfg(test)]
