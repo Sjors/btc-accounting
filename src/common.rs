@@ -434,6 +434,56 @@ pub fn fetch_candle_for_timestamp(
         return Err(anyhow::Error::new(RateLimitedError { retry_after_secs }));
     }
 
+    let candle_rows = parse_kraken_ohlc_response(response, config, &url)?;
+
+    candle_rows
+        .iter()
+        .filter_map(parse_candle_row)
+        .find(|candle| timestamp >= candle.time && timestamp < candle.time + interval_seconds)
+        .ok_or_else(|| {
+            anyhow!(
+                "Kraken did not return the {} minute candle covering {}",
+                interval_minutes,
+                format_local_timestamp(timestamp)
+            )
+        })
+}
+
+pub fn fetch_candles_since(
+    client: &Client,
+    config: &AppConfig,
+    interval_minutes: u32,
+    since: i64,
+) -> Result<Vec<Candle>> {
+    let url = format!(
+        "{}/0/public/OHLC?pair={}&interval={interval_minutes}&since={since}",
+        KRAKEN_BASE_URL, config.kraken_pair
+    );
+
+    let response = client
+        .get(&url)
+        .send()
+        .with_context(|| format!("failed to query Kraken at {url}"))?;
+
+    let candle_rows = parse_kraken_ohlc_response(response, config, &url)?;
+
+    Ok(candle_rows.iter().filter_map(parse_candle_row).collect())
+}
+
+fn parse_kraken_ohlc_response(
+    response: reqwest::blocking::Response,
+    config: &AppConfig,
+    url: &str,
+) -> Result<Vec<Value>> {
+    if response.status() == StatusCode::TOO_MANY_REQUESTS {
+        let retry_after_secs = response
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<u64>().ok());
+        return Err(anyhow::Error::new(RateLimitedError { retry_after_secs }));
+    }
+
     let response = response
         .error_for_status()
         .with_context(|| format!("Kraken returned an error for {url}"))?;
@@ -452,22 +502,12 @@ pub fn fetch_candle_for_timestamp(
     let result = payload
         .result
         .context("Kraken response is missing a result field")?;
-    let candle_rows = result
+
+    result
         .get(&config.kraken_pair)
         .and_then(Value::as_array)
-        .ok_or_else(|| anyhow!("Kraken response does not include pair {}", config.kraken_pair))?;
-
-    candle_rows
-        .iter()
-        .filter_map(parse_candle_row)
-        .find(|candle| timestamp >= candle.time && timestamp < candle.time + interval_seconds)
-        .ok_or_else(|| {
-            anyhow!(
-                "Kraken did not return the {} minute candle covering {}",
-                interval_minutes,
-                format_local_timestamp(timestamp)
-            )
-        })
+        .cloned()
+        .ok_or_else(|| anyhow!("Kraken response does not include pair {}", config.kraken_pair))
 }
 
 fn parse_candle_row(row: &Value) -> Option<Candle> {
