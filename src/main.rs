@@ -121,6 +121,48 @@ mod tests {
         match command {
             Command::CacheRates(args) => {
                 assert_eq!(args.year, 2024);
+                assert!(!args.use_vwap_archive);
+                assert_eq!(args.candle_override_minutes, None);
+            }
+            _ => panic!("expected CacheRates"),
+        }
+    }
+
+    #[test]
+    fn parses_cache_rates_vwap_subcommand() {
+        let command = parse_command_from(vec![
+            "cache-rates".to_owned(),
+            "--vwap".to_owned(),
+            "2024".to_owned(),
+        ])
+        .expect("command");
+
+        match command {
+            Command::CacheRates(args) => {
+                assert_eq!(args.year, 2024);
+                assert!(args.use_vwap_archive);
+                assert_eq!(args.candle_override_minutes, None);
+            }
+            _ => panic!("expected CacheRates"),
+        }
+    }
+
+    #[test]
+    fn parses_cache_rates_vwap_candle_override_subcommand() {
+        let command = parse_command_from(vec![
+            "cache-rates".to_owned(),
+            "--vwap".to_owned(),
+            "--candle".to_owned(),
+            "60".to_owned(),
+            "2024".to_owned(),
+        ])
+        .expect("command");
+
+        match command {
+            Command::CacheRates(args) => {
+                assert_eq!(args.year, 2024);
+                assert!(args.use_vwap_archive);
+                assert_eq!(args.candle_override_minutes, Some(60));
             }
             _ => panic!("expected CacheRates"),
         }

@@ -24,22 +24,33 @@ Populate `.cache/rates.json` for one UTC calendar year of Bitcoin rates.
 
 ```bash
 cargo run -- cache-rates 2024
+cargo run -- cache-rates --vwap 2024
+cargo run -- cache-rates --vwap --candle 60 2024
 ```
 
 The command works as follows:
 
-1. Fetches the daily (`1440`) Kraken `OHLC` data that is still available through the public API.
-2. Detects which closed UTC daily candles in the requested year are still missing because they are older than Kraken's 720-candle retention window.
-3. Backfills those missing days into `.cache/rates.json` from Kraken's downloadable OHLCVT archive.
+1. Without `--vwap`, fetches the daily (`1440`) Kraken `OHLC` data that is still available through the public API.
+2. Detects which closed UTC candles in the requested year are still missing because they are older than Kraken's 720-candle retention window.
+3. Backfills those missing candles into `.cache/rates.json` from one of Kraken's downloadable archives:
+   the default OHLCVT archive, or the larger time-and-sales archive when `--vwap` is set.
 
-The cache keys are written as `1440`-minute entries.
+By default, the cache keys are written as normal `1440`-minute entries. With `--vwap`, the command writes entries at `DEFAULT_CANDLE_MINUTES` if configured, or `1440` otherwise; `--candle <minutes>` overrides that in the normal way.
 
 Trade-off:
 
 - Recent days use Kraken's daily `OHLC` API `vwap`, just like the normal live lookup path.
-- Older archive-backed days use the daily `(open + close) / 2` midpoint derived from Kraken's OHLCVT CSV, because the downloadable OHLCVT archive does not include `vwap`.
-- The command only fills missing cache entries for that year and interval; it does not overwrite existing entries with midpoint-derived values.
+- Without `--vwap`, older archive-backed days use the daily `(open + close) / 2` midpoint derived from Kraken's OHLCVT CSV, because the downloadable OHLCVT archive does not include `vwap`.
+- Without `--vwap`, the command only fills missing cache entries for that year and interval; it does not overwrite existing entries with midpoint-derived values.
+- With `--vwap`, the command computes exact Kraken VWAP candles at the chosen interval from the downloadable time-and-sales trade archive (`timestamp,price,volume`) and overwrites any existing cache entries for that year and interval.
+- With `--vwap`, the command first checks whether the public API still covers part of the requested year at the chosen interval. If quarterly trade archives are available for the rest, it keeps the API slice and downloads only the missing quarters. If the complete trade archive is inevitable anyway, it skips the API and computes the whole year from the archive.
+- With `--vwap`, the command tries quarterly trade archives first and falls back to Kraken's complete trade archive automatically if that year's quarterly trade ZIPs are not published.
 - Downloaded Kraken archive ZIPs are kept under `.cache/kraken/` and reused across later runs; the command does not keep expanded CSV files on disk.
+- `--vwap` is substantially heavier because Kraken's trade archives are much larger than the OHLCVT archives, especially when the complete trade archive ZIP is needed instead of quarterly updates.
+
+For years whose quarterly trade ZIPs are not published, `cache-rates --vwap`
+falls back to Kraken's complete trade archive, which requires a ~12G download.
+But it does mean VWAP values can be constructed as far back as late 2013.
 
 ### `export`
 
@@ -192,7 +203,7 @@ transaction_age <= 720 * interval_minutes * 60
 
 If the transaction is too old to fit inside Kraken's `1d` candle retention window, the tool exits with an error instead of silently switching to a coarser interval.
 
-`cache-rates` is the explicit opt-in workaround for older values: it backfills `.cache/rates.json` from Kraken's OHLCVT archive as daily `(open + close) / 2` midpoint prices.
+`cache-rates` is the explicit opt-in workaround for older values: by default it backfills `.cache/rates.json` from Kraken's OHLCVT archive as daily `(open + close) / 2` midpoint prices, or with `--vwap` it computes exact Kraken VWAP candles at the chosen interval from the larger trade archive.
 
 ## Development
 

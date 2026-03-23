@@ -9,11 +9,14 @@ use csv::StringRecord;
 use reqwest::blocking::{Client, Response};
 use zip::ZipArchive;
 
-use crate::common::{AppConfig, build_http_client, fetch_candles_since};
+use crate::common::{
+    AppConfig, KRAKEN_INTERVALS_MINUTES, build_http_client, fetch_candles_since,
+    parse_candle_interval_minutes,
+};
 use crate::exchange_rate::{CACHE_DIR, cache_key, cache_path, load_disk_cache, save_disk_cache};
 
 pub const SUBCOMMAND_NAME: &str = "cache-rates";
-pub const USAGE: &str = "usage: btc_fiat_value cache-rates <year>";
+pub const USAGE: &str = "usage: btc_fiat_value cache-rates [--vwap] [--candle <minutes>] <year>";
 
 const KRAKEN_DAILY_INTERVAL_MINUTES: u32 = 1_440;
 const QUARTERLY_ARCHIVE_FIRST_YEAR: i32 = 2023;
@@ -23,9 +26,18 @@ const QUARTERLY_ARCHIVE_FIRST_YEAR: i32 = 2023;
 // If Kraken changes the Google Drive ids or stops publishing them there, update these constants.
 const COMPLETE_OHLCVT_ARCHIVE_FILE_ID: &str = "1ptNqWYidLkhb2VAKuLCxmp2OXEfGO-AP";
 const QUARTERLY_OHLCVT_ARCHIVE_FOLDER_ID: &str = "15RSlNuW_h0kVM8or8McOGOMfHeBFvFGI";
+// Kraken time-and-sales archive references:
+// - Downloadable trade archive landing page: https://support.kraken.com/articles/360047543791-downloadable-historical-market-data-time-and-sales-
+// - OHLC REST docs for the live daily VWAP path: https://docs.kraken.com/api/docs/rest-api/get-ohlc-data/
+// If Kraken changes the Google Drive ids or stops publishing them there, update these constants.
+const COMPLETE_TRADE_ARCHIVE_FILE_ID: &str = "10zh3tDpqANYvVtYVgczwVz3UZFRUb1el";
+const QUARTERLY_TRADE_ARCHIVE_FOLDER_ID: &str = "188O9xQjZTythjyLNes_5zfMEFaMbTT22";
+
 #[derive(Debug, Eq, PartialEq)]
 pub struct CacheRatesArgs {
     pub year: i32,
+    pub use_vwap_archive: bool,
+    pub candle_override_minutes: Option<u32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -41,6 +53,12 @@ struct PreparedArchive {
     extracted_path: PathBuf,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PreparedArchiveFile {
+    file: DriveFile,
+    archive: PreparedArchive,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ArchiveCoverage {
     first: i64,
@@ -50,6 +68,7 @@ struct ArchiveCoverage {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ArchiveBackfillMode {
     Midpoint,
+    Vwap,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -94,8 +113,12 @@ pub fn run(args: CacheRatesArgs) -> Result<()> {
     let _temp_cache = TempCacheGuard::new()?;
     let config = AppConfig::from_env()?;
     let archive_pair = archive_pair_name(&config.kraken_pair)?;
-    let archive_mode = ArchiveBackfillMode::Midpoint;
-    let target_interval_minutes = target_interval_minutes(&config)?;
+    let archive_mode = if args.use_vwap_archive {
+        ArchiveBackfillMode::Vwap
+    } else {
+        ArchiveBackfillMode::Midpoint
+    };
+    let target_interval_minutes = target_interval_minutes(&args, &config)?;
     let now = Utc::now();
     let (start_ts, end_ts) = closed_interval_year_bounds(args.year, now, target_interval_minutes)?;
 
@@ -116,6 +139,7 @@ pub fn run(args: CacheRatesArgs) -> Result<()> {
             target_interval_minutes,
         );
     }
+    let full_span_quarters = missing_quarters(&missing_starts);
     let quarterly_files = if !missing_starts.is_empty() && args.year >= QUARTERLY_ARCHIVE_FIRST_YEAR {
         let archive_client = build_http_client("Kraken archive", None)?;
         eprintln!(
@@ -132,7 +156,22 @@ pub fn run(args: CacheRatesArgs) -> Result<()> {
     } else {
         None
     };
-    let should_fetch_api = true;
+    let has_full_quarterly_coverage = quarterly_files
+        .as_ref()
+        .and_then(|files| {
+            resolve_quarterly_archive_files(
+                files,
+                archive_mode.quarterly_archive_prefix(),
+                args.year,
+                &full_span_quarters,
+            )
+        })
+        .is_some();
+    let api_can_cover_entire_span = missing_starts.len() <= 720;
+    let should_fetch_api = match archive_mode {
+        ArchiveBackfillMode::Midpoint => true,
+        ArchiveBackfillMode::Vwap => api_can_cover_entire_span || has_full_quarterly_coverage,
+    };
 
     let mut recent_stats = CacheWriteStats::default();
     if should_fetch_api {
@@ -169,7 +208,9 @@ pub fn run(args: CacheRatesArgs) -> Result<()> {
     }
 
     let mut archive_stats = CacheWriteStats::default();
+    let mut fallback_stats = CacheWriteStats::default();
     let mut used_complete_archive_fallback = false;
+    let mut prepared_archives = Vec::new();
     if !missing_starts.is_empty() {
         let archive_client = build_http_client("Kraken archive", None)?;
 
@@ -208,6 +249,10 @@ pub fn run(args: CacheRatesArgs) -> Result<()> {
                     &mut cache,
                     archive_mode,
                 )?);
+                prepared_archives.push(PreparedArchiveFile {
+                    file,
+                    archive: prepared_archive,
+                });
             }
         } else {
             used_complete_archive_fallback = true;
@@ -236,6 +281,50 @@ pub fn run(args: CacheRatesArgs) -> Result<()> {
                 &mut cache,
                 archive_mode,
             )?);
+            prepared_archives.push(PreparedArchiveFile {
+                file,
+                archive: prepared_archive,
+            });
+        }
+    }
+
+    if archive_mode == ArchiveBackfillMode::Vwap && !missing_starts.is_empty() {
+        for fallback_interval_minutes in fallback_trade_intervals(target_interval_minutes) {
+            let missing_before = missing_starts.len();
+            eprintln!(
+                "Warning: exact {}-minute trade VWAP was unavailable for {} interval(s); falling back to {}-minute trade VWAP for those gaps.",
+                target_interval_minutes,
+                missing_before,
+                fallback_interval_minutes,
+            );
+            let mut level_stats = CacheWriteStats::default();
+            for prepared_archive in &prepared_archives {
+                level_stats.absorb(read_prepared_archive(
+                    &prepared_archive.archive,
+                    &prepared_archive.file,
+                    &config.kraken_pair,
+                    &archive_pair,
+                    start_ts,
+                    end_ts,
+                    target_interval_minutes,
+                    Some(fallback_interval_minutes),
+                    &mut missing_starts,
+                    &mut cache,
+                    archive_mode,
+                )?);
+            }
+            fallback_stats.absorb(level_stats);
+            if level_stats.written() > 0 {
+                eprintln!(
+                    "Filled {} {}-minute gap(s) using {}-minute trade VWAP.",
+                    level_stats.written(),
+                    target_interval_minutes,
+                    fallback_interval_minutes,
+                );
+            }
+            if missing_starts.is_empty() {
+                break;
+            }
         }
     }
 
@@ -256,9 +345,13 @@ pub fn run(args: CacheRatesArgs) -> Result<()> {
 
     save_disk_cache(&cache)?;
 
-    let inserted_count = recent_stats.inserted + archive_stats.inserted;
-    let replaced_count = recent_stats.replaced + archive_stats.replaced;
-    let skipped_count = existing_cache_count;
+    let inserted_count = recent_stats.inserted + archive_stats.inserted + fallback_stats.inserted;
+    let replaced_count = recent_stats.replaced + archive_stats.replaced + fallback_stats.replaced;
+    let skipped_count = if archive_mode == ArchiveBackfillMode::Midpoint {
+        existing_cache_count
+    } else {
+        recent_stats.skipped + archive_stats.skipped + fallback_stats.skipped
+    };
     let total_count = inserted_count + replaced_count + skipped_count;
     eprintln!(
         "Cached {total_count} {}-minute rate(s) for {} in {}.",
@@ -270,8 +363,16 @@ pub fn run(args: CacheRatesArgs) -> Result<()> {
     eprintln!("Replaced existing cache entries: {replaced_count}");
     eprintln!("Skipped existing cache entries: {skipped_count}");
     eprintln!("Kraken OHLC API rows: {}", recent_stats.written());
-    eprintln!("OHLCVT archive midpoint rows: {}", archive_stats.written());
-    if used_complete_archive_fallback && archive_stats.total() > 0 {
+    eprintln!("{}: {}", archive_mode.summary_label(), archive_stats.written());
+    if fallback_stats.written() > 0 {
+        eprintln!(
+            "Trade archive larger-candle fallback rows: {}",
+            fallback_stats.written()
+        );
+    }
+    if used_complete_archive_fallback
+        && (archive_stats.total() > 0 || fallback_stats.total() > 0)
+    {
         eprintln!(
             "Quarterly {} archives were unavailable for {}, so the command fell back to the complete {} archive.",
             archive_mode.archive_label(),
@@ -279,10 +380,16 @@ pub fn run(args: CacheRatesArgs) -> Result<()> {
             archive_mode.archive_label(),
         );
     }
-    if archive_stats.total() > 0 {
-        eprintln!(
-            "Archive-backed rows use the daily (open + close) / 2 midpoint because Kraken's OHLCVT CSV does not include VWAP."
-        );
+    if archive_stats.total() > 0 || fallback_stats.total() > 0 {
+        match archive_mode {
+            ArchiveBackfillMode::Midpoint => eprintln!(
+                "Archive-backed rows use the daily (open + close) / 2 midpoint because Kraken's OHLCVT CSV does not include VWAP. Re-run with --vwap for exact trade-derived VWAP."
+            ),
+            ArchiveBackfillMode::Vwap => eprintln!(
+                "Archive-backed rows use exact {}-minute VWAP computed from Kraken's time-and-sales trade archive, overwriting any existing cache entries for that year and interval.",
+                target_interval_minutes
+            ),
+        }
     }
 
     Ok(())
@@ -293,13 +400,33 @@ where
     I: IntoIterator<Item = String>,
 {
     let mut year = None;
+    let mut use_vwap_archive = false;
+    let mut candle_override_minutes = None;
     let mut args = args.into_iter();
 
     while let Some(arg) = args.next() {
+        if arg == "--vwap" {
+            use_vwap_archive = true;
+            continue;
+        }
+        if arg == "--candle" {
+            let value = args.next().ok_or_else(|| anyhow!("{usage}"))?;
+            candle_override_minutes = Some(parse_candle_interval_minutes(&value, "--candle")?);
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("--candle=") {
+            candle_override_minutes = Some(parse_candle_interval_minutes(value, "--candle")?);
+            continue;
+        }
+
         if year.is_some() {
             bail!("{usage}");
         }
         year = Some(arg);
+    }
+
+    if candle_override_minutes.is_some() && !use_vwap_archive {
+        bail!("--candle requires --vwap\n\n{usage}");
     }
 
     let year = year.ok_or_else(|| anyhow!("{usage}"))?;
@@ -309,11 +436,20 @@ where
 
     Ok(CacheRatesArgs {
         year,
+        use_vwap_archive,
+        candle_override_minutes,
     })
 }
 
-fn target_interval_minutes(_config: &AppConfig) -> Result<u32> {
-    Ok(KRAKEN_DAILY_INTERVAL_MINUTES)
+fn target_interval_minutes(args: &CacheRatesArgs, config: &AppConfig) -> Result<u32> {
+    if !args.use_vwap_archive {
+        return Ok(KRAKEN_DAILY_INTERVAL_MINUTES);
+    }
+
+    Ok(args
+        .candle_override_minutes
+        .or(config.default_candle_minutes)
+        .unwrap_or(KRAKEN_DAILY_INTERVAL_MINUTES))
 }
 
 fn closed_interval_year_bounds(
@@ -373,11 +509,11 @@ fn count_cached_starts(
 }
 
 fn should_store_api_candle(
-    _archive_mode: ArchiveBackfillMode,
+    archive_mode: ArchiveBackfillMode,
     missing_starts: &BTreeSet<i64>,
     candle_start: i64,
 ) -> bool {
-    missing_starts.contains(&candle_start)
+    archive_mode == ArchiveBackfillMode::Vwap || missing_starts.contains(&candle_start)
 }
 
 fn drop_cached_starts(
@@ -518,7 +654,7 @@ fn read_archive_zip(
     start_ts: i64,
     end_ts: i64,
     target_interval_minutes: u32,
-    _trade_source_interval_minutes: Option<u32>,
+    trade_source_interval_minutes: Option<u32>,
     missing_starts: &mut BTreeSet<i64>,
     cache: &mut HashMap<String, f64>,
     archive_mode: ArchiveBackfillMode,
@@ -540,6 +676,17 @@ fn read_archive_zip(
             kraken_pair,
             start_ts,
             end_ts,
+            target_interval_minutes,
+            missing_starts,
+            cache,
+        ),
+        ArchiveBackfillMode::Vwap => read_trade_interval_csv(
+            &mut reader,
+            &entry_name,
+            kraken_pair,
+            start_ts,
+            end_ts,
+            trade_source_interval_minutes.unwrap_or(target_interval_minutes),
             target_interval_minutes,
             missing_starts,
             cache,
@@ -682,6 +829,88 @@ fn read_ohlcvt_daily_csv<R: io::Read>(
         ));
         missing_starts.remove(&timestamp);
     }
+
+    Ok(stats)
+}
+
+fn read_trade_interval_csv<R: io::Read>(
+    reader: &mut csv::Reader<R>,
+    entry_name: &str,
+    kraken_pair: &str,
+    start_ts: i64,
+    end_ts: i64,
+    source_interval_minutes: u32,
+    target_interval_minutes: u32,
+    missing_starts: &mut BTreeSet<i64>,
+    cache: &mut HashMap<String, f64>,
+) -> Result<CacheWriteStats> {
+    let mut stats = CacheWriteStats::default();
+    let interval_seconds = i64::from(source_interval_minutes) * 60;
+    let mut current_start = None;
+    let mut price_volume_sum = 0.0f64;
+    let mut volume_sum = 0.0f64;
+    let mut last_logged_year = None;
+
+    for record in reader.records() {
+        let record = record.with_context(|| format!("failed to parse a row in {entry_name}"))?;
+        let timestamp = parse_archive_timestamp(&record, entry_name)?;
+        if timestamp < start_ts {
+            continue;
+        }
+        if timestamp < end_ts {
+            log_archive_year_progress(
+                timestamp,
+                &mut last_logged_year,
+                "trade archive",
+                source_interval_minutes,
+            )?;
+        }
+
+        let slot_start = timestamp - timestamp.rem_euclid(interval_seconds);
+        if current_start != Some(slot_start) {
+            stats.absorb(flush_trade_interval(
+                current_start,
+                price_volume_sum,
+                volume_sum,
+                kraken_pair,
+                source_interval_minutes,
+                target_interval_minutes,
+                missing_starts,
+                cache,
+            )?);
+            current_start = Some(slot_start);
+            price_volume_sum = 0.0;
+            volume_sum = 0.0;
+        }
+
+        if timestamp >= end_ts {
+            break;
+        }
+        if !bucket_has_missing_targets(
+            missing_starts,
+            slot_start,
+            source_interval_minutes,
+            target_interval_minutes,
+        ) {
+            continue;
+        }
+
+        let price = parse_archive_number(&record, 1, "price", entry_name)?;
+        let volume = parse_archive_number(&record, 2, "volume", entry_name)?;
+        price_volume_sum += price * volume;
+        volume_sum += volume;
+    }
+
+    stats.absorb(flush_trade_interval(
+        current_start,
+        price_volume_sum,
+        volume_sum,
+        kraken_pair,
+        source_interval_minutes,
+        target_interval_minutes,
+        missing_starts,
+        cache,
+    )?);
 
     Ok(stats)
 }
@@ -1035,6 +1264,13 @@ fn needed_archive_start(end_ts: i64, target_interval_minutes: u32) -> i64 {
     end_ts - i64::from(target_interval_minutes) * 60
 }
 
+fn fallback_trade_intervals(target_interval_minutes: u32) -> Vec<u32> {
+    KRAKEN_INTERVALS_MINUTES
+        .into_iter()
+        .filter(|interval| *interval > target_interval_minutes)
+        .collect()
+}
+
 fn archive_file_description(file: &DriveFile, archive_mode: ArchiveBackfillMode) -> String {
     if file.name == archive_mode.complete_archive_name() {
         format!(
@@ -1118,6 +1354,70 @@ fn archive_pair_name(kraken_pair: &str) -> Result<String> {
     }
 
     bail!("cache-rates only supports Kraken XBT quote pairs such as XXBTZUSD or XXBTZEUR")
+}
+
+fn flush_trade_interval(
+    candle_start: Option<i64>,
+    price_volume_sum: f64,
+    volume_sum: f64,
+    kraken_pair: &str,
+    source_interval_minutes: u32,
+    target_interval_minutes: u32,
+    missing_starts: &mut BTreeSet<i64>,
+    cache: &mut HashMap<String, f64>,
+) -> Result<CacheWriteStats> {
+    let Some(candle_start) = candle_start else {
+        return Ok(CacheWriteStats::default());
+    };
+    let source_interval_seconds = i64::from(source_interval_minutes) * 60;
+    let target_interval_seconds = i64::from(target_interval_minutes) * 60;
+    let source_end = candle_start + source_interval_seconds;
+    let bucket_missing = missing_starts
+        .range(candle_start..source_end)
+        .copied()
+        .collect::<Vec<_>>();
+    if bucket_missing.is_empty() {
+        return Ok(CacheWriteStats::default());
+    }
+    if volume_sum <= 0.0 {
+        return Ok(CacheWriteStats::default());
+    }
+
+    let vwap = price_volume_sum / volume_sum;
+    let mut stats = CacheWriteStats::default();
+    let mut slot = candle_start;
+    while slot < source_end {
+        if missing_starts.remove(&slot) {
+            stats.record(store_cache_value(
+                cache,
+                kraken_pair,
+                target_interval_minutes,
+                slot,
+                vwap,
+            ));
+        }
+        slot += target_interval_seconds;
+    }
+    Ok(stats)
+}
+
+fn bucket_has_missing_targets(
+    missing_starts: &BTreeSet<i64>,
+    candle_start: i64,
+    source_interval_minutes: u32,
+    target_interval_minutes: u32,
+) -> bool {
+    let source_interval_seconds = i64::from(source_interval_minutes) * 60;
+    let target_interval_seconds = i64::from(target_interval_minutes) * 60;
+    let source_end = candle_start + source_interval_seconds;
+    let mut slot = candle_start;
+    while slot < source_end {
+        if missing_starts.contains(&slot) {
+            return true;
+        }
+        slot += target_interval_seconds;
+    }
+    false
 }
 
 fn midnight_utc_timestamp(date: NaiveDate) -> i64 {
@@ -1211,36 +1511,49 @@ impl ArchiveBackfillMode {
     fn archive_label(self) -> &'static str {
         match self {
             Self::Midpoint => "OHLCVT",
+            Self::Vwap => "trade",
         }
     }
 
     fn quarterly_archive_prefix(self) -> &'static str {
         match self {
             Self::Midpoint => "Kraken_OHLCVT_",
+            Self::Vwap => "Kraken_Trading_History_",
         }
     }
 
     fn quarterly_archive_folder_id(self) -> &'static str {
         match self {
             Self::Midpoint => QUARTERLY_OHLCVT_ARCHIVE_FOLDER_ID,
+            Self::Vwap => QUARTERLY_TRADE_ARCHIVE_FOLDER_ID,
         }
     }
 
     fn complete_archive_file_id(self) -> &'static str {
         match self {
             Self::Midpoint => COMPLETE_OHLCVT_ARCHIVE_FILE_ID,
+            Self::Vwap => COMPLETE_TRADE_ARCHIVE_FILE_ID,
         }
     }
 
     fn complete_archive_name(self) -> &'static str {
         match self {
             Self::Midpoint => "Kraken_OHLCVT.zip",
+            Self::Vwap => "Kraken_Trading_History.zip",
         }
     }
 
     fn entry_name(self, archive_pair: &str) -> String {
         match self {
             Self::Midpoint => format!("{archive_pair}_1440.csv"),
+            Self::Vwap => format!("{archive_pair}.csv"),
+        }
+    }
+
+    fn summary_label(self) -> &'static str {
+        match self {
+            Self::Midpoint => "OHLCVT archive midpoint rows",
+            Self::Vwap => "Trade archive VWAP candles",
         }
     }
 }
@@ -1250,14 +1563,18 @@ mod tests {
     use std::collections::{BTreeSet, HashMap};
     use std::io::Cursor;
     use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use crate::common::AppConfig;
 
     use super::{
-        ArchiveCoverage, CacheRatesArgs, CacheWriteOutcome,
+        ArchiveCoverage, CacheRatesArgs, CacheWriteOutcome, DriveFile,
         accept_complete_archive_replacement,
-        archive_download_path, archive_pair_name,
-        extract_quarterly_drive_files, parse_args_from,
-        read_ohlcvt_daily_csv, resolve_archive_entry_name,
-        should_store_api_candle, store_cache_value,
+        PreparedArchive, archive_download_path, archive_pair_name, ensure_archive_downloaded,
+        extracted_archive_entry_path, extract_quarterly_drive_files, parse_args_from,
+        read_ohlcvt_daily_csv, read_trade_interval_csv, resolve_archive_entry_name,
+        resolve_quarterly_archive_files, should_store_api_candle, store_cache_value,
+        target_interval_minutes,
     };
 
     const REAL_XBTEUR_1440_SAMPLE: &str = "\
@@ -1267,28 +1584,139 @@ mod tests {
 ";
     const REAL_XBTEUR_1440_OVERLAP_ROW: &str =
         "1711929600,66130.0,66130.0,63461.9,64902.9,528.8081404,23715";
+    const REAL_XBTEUR_2026_03_21_TRADES: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/kraken_xbteur_2026-03-21_trades.csv"
+    ));
+    const REAL_XBTEUR_TRADES_SAMPLE: &str = "\
+1735689600,90167.30000,0.00054633
+1735689600,90167.30000,0.00005463
+1735689600,90167.10000,0.00002185
+1735776000,91190.30000,0.00002161
+1735776000,91190.30000,0.00001080
+1735776000,91190.20000,0.00060000
+";
 
     #[test]
     fn parses_cache_rates_args() {
         let args = parse_args_from(
             vec!["2024".to_owned()],
-            "usage: btc_fiat_value cache-rates <year>",
+            "usage: btc_fiat_value cache-rates [--vwap] [--candle <minutes>] <year>",
         )
         .expect("args");
-        assert_eq!(args, CacheRatesArgs { year: 2024 });
+        assert_eq!(
+            args,
+            CacheRatesArgs {
+                year: 2024,
+                use_vwap_archive: false,
+                candle_override_minutes: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_cache_rates_vwap_flag() {
+        let args = parse_args_from(
+            vec!["--vwap".to_owned(), "2024".to_owned()],
+            "usage: btc_fiat_value cache-rates [--vwap] [--candle <minutes>] <year>",
+        )
+        .expect("args");
+        assert_eq!(
+            args,
+            CacheRatesArgs {
+                year: 2024,
+                use_vwap_archive: true,
+                candle_override_minutes: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_cache_rates_vwap_candle_override() {
+        let args = parse_args_from(
+            vec![
+                "--vwap".to_owned(),
+                "--candle".to_owned(),
+                "60".to_owned(),
+                "2024".to_owned(),
+            ],
+            "usage: btc_fiat_value cache-rates [--vwap] [--candle <minutes>] <year>",
+        )
+        .expect("args");
+        assert_eq!(
+            args,
+            CacheRatesArgs {
+                year: 2024,
+                use_vwap_archive: true,
+                candle_override_minutes: Some(60),
+            }
+        );
     }
 
     #[test]
     fn rejects_extra_cache_rates_args() {
         let err = parse_args_from(
             vec!["2024".to_owned(), "extra".to_owned()],
-            "usage: btc_fiat_value cache-rates <year>",
+            "usage: btc_fiat_value cache-rates [--vwap] [--candle <minutes>] <year>",
         )
         .expect_err("should fail");
 
         assert!(err
             .to_string()
-            .contains("usage: btc_fiat_value cache-rates <year>"));
+            .contains("usage: btc_fiat_value cache-rates [--vwap] [--candle <minutes>] <year>"));
+    }
+
+    #[test]
+    fn rejects_cache_rates_candle_override_without_vwap() {
+        let err = parse_args_from(
+            vec!["--candle".to_owned(), "60".to_owned(), "2024".to_owned()],
+            "usage: btc_fiat_value cache-rates [--vwap] [--candle <minutes>] <year>",
+        )
+        .expect_err("should fail");
+
+        assert!(err.to_string().contains("--candle requires --vwap"));
+    }
+
+    #[test]
+    fn vwap_uses_default_candle_minutes_when_present() {
+        let config = AppConfig::from_env_values(|name| match name {
+            "DEFAULT_CANDLE_MINUTES" => Some("60".to_owned()),
+            _ => None,
+        })
+        .expect("config");
+
+        let interval = target_interval_minutes(
+            &CacheRatesArgs {
+                year: 2024,
+                use_vwap_archive: true,
+                candle_override_minutes: None,
+            },
+            &config,
+        )
+        .expect("interval");
+
+        assert_eq!(interval, 60);
+    }
+
+    #[test]
+    fn vwap_candle_override_beats_default_candle_minutes() {
+        let config = AppConfig::from_env_values(|name| match name {
+            "DEFAULT_CANDLE_MINUTES" => Some("60".to_owned()),
+            _ => None,
+        })
+        .expect("config");
+
+        let interval = target_interval_minutes(
+            &CacheRatesArgs {
+                year: 2024,
+                use_vwap_archive: true,
+                candle_override_minutes: Some(240),
+            },
+            &config,
+        )
+        .expect("interval");
+
+        assert_eq!(interval, 240);
     }
 
     #[test]
@@ -1322,6 +1750,11 @@ mod tests {
             super::ArchiveBackfillMode::Midpoint,
             &missing_days,
             1672617600,
+        ));
+        assert!(should_store_api_candle(
+            super::ArchiveBackfillMode::Vwap,
+            &missing_days,
+            1672531200,
         ));
     }
 
@@ -1367,6 +1800,44 @@ mod tests {
             .expect("files");
         assert_eq!(files["Kraken_OHLCVT_Q1_2024.zip"].id, "abc123");
         assert_eq!(files["Kraken_OHLCVT_Q2_2024.zip"].id, "def456");
+    }
+
+    #[test]
+    fn extracts_quarterly_trade_file_ids_from_drive_html() {
+        let html = concat!(
+            "window['_DRIVE_ivd'] = '",
+            "Kraken_Trading_History_Q1_2024.zip ",
+            "https:\\/\\/drive.google.com\\/file\\/d\\/abc123\\/view ",
+            "Kraken_Trading_History_Q2_2024.zip ",
+            "https:\\/\\/drive.google.com\\/file\\/d\\/def456\\/view",
+            "';if (window['_DRIVE_ivdc'])"
+        );
+
+        let files = extract_quarterly_drive_files(html, "Kraken_Trading_History_", "trade")
+            .expect("files");
+        assert_eq!(files["Kraken_Trading_History_Q1_2024.zip"].id, "abc123");
+        assert_eq!(files["Kraken_Trading_History_Q2_2024.zip"].id, "def456");
+    }
+
+    #[test]
+    fn falls_back_when_needed_quarterly_trade_archive_is_missing() {
+        let quarterly_files = HashMap::from([(
+            "Kraken_Trading_History_Q1_2025.zip".to_owned(),
+            DriveFile {
+                id: "abc123".to_owned(),
+                name: "Kraken_Trading_History_Q1_2025.zip".to_owned(),
+            },
+        )]);
+        let needed_quarters = BTreeSet::from([1_u32, 2_u32]);
+
+        let resolved = resolve_quarterly_archive_files(
+            &quarterly_files,
+            "Kraken_Trading_History_",
+            2025,
+            &needed_quarters,
+        );
+
+        assert!(resolved.is_none());
     }
 
     #[test]
@@ -1478,6 +1949,332 @@ mod tests {
         assert!(err
             .to_string()
             .contains("invalid close value nope in XBTEUR_1440.csv"));
+    }
+
+    #[test]
+    fn reads_real_trade_csv_rows_into_daily_vwap_cache() {
+        let mut reader = csv::ReaderBuilder::new()
+            .has_headers(false)
+            .from_reader(Cursor::new(REAL_XBTEUR_TRADES_SAMPLE));
+        let mut missing_days = BTreeSet::from([1735689600_i64, 1735776000_i64]);
+        let mut cache = HashMap::new();
+
+        let stats = read_trade_interval_csv(
+            &mut reader,
+            "XBTEUR.csv",
+            "XXBTZEUR",
+            1735689600,
+            1735862400,
+            1440,
+            1440,
+            &mut missing_days,
+            &mut cache,
+        )
+        .expect("csv should parse");
+
+        let day1 = ((90167.3 * 0.00054633) + (90167.3 * 0.00005463) + (90167.1 * 0.00002185))
+            / (0.00054633 + 0.00005463 + 0.00002185);
+        let day2 = ((91190.3 * 0.00002161) + (91190.3 * 0.00001080) + (91190.2 * 0.00060000))
+            / (0.00002161 + 0.00001080 + 0.00060000);
+
+        assert_eq!(stats.inserted, 2);
+        assert_eq!(stats.replaced, 0);
+        assert_eq!(stats.skipped, 0);
+        assert_eq!(cache["XXBTZEUR:1440:1735689600"], super::normalize_fiat_rate(day1));
+        assert_eq!(cache["XXBTZEUR:1440:1735776000"], super::normalize_fiat_rate(day2));
+        assert!(missing_days.is_empty());
+    }
+
+    #[test]
+    fn reads_trade_csv_rows_into_hourly_vwap_cache() {
+        let trades = "\
+1735689600,100.0,1.0
+1735691400,110.0,3.0
+1735693200,120.0,2.0
+1735695000,90.0,2.0
+";
+        let mut reader = csv::ReaderBuilder::new()
+            .has_headers(false)
+            .from_reader(Cursor::new(trades));
+        let mut missing_hours = BTreeSet::from([1735689600_i64, 1735693200_i64]);
+        let mut cache = HashMap::new();
+
+        let stats = read_trade_interval_csv(
+            &mut reader,
+            "XBTEUR.csv",
+            "XXBTZEUR",
+            1735689600,
+            1735696800,
+            60,
+            60,
+            &mut missing_hours,
+            &mut cache,
+        )
+        .expect("csv should parse");
+
+        assert_eq!(stats.inserted, 2);
+        assert_eq!(stats.replaced, 0);
+        assert_eq!(stats.skipped, 0);
+        assert_eq!(cache["XXBTZEUR:60:1735689600"], super::normalize_fiat_rate(107.5));
+        assert_eq!(cache["XXBTZEUR:60:1735693200"], super::normalize_fiat_rate(105.0));
+        assert!(missing_hours.is_empty());
+    }
+
+    #[test]
+    fn larger_trade_candle_fills_missing_smaller_intervals() {
+        let trades = "\
+1735689900,100.0,1.0
+1735697100,140.0,3.0
+";
+        let mut reader = csv::ReaderBuilder::new()
+            .has_headers(false)
+            .from_reader(Cursor::new(trades));
+        let mut missing_hours =
+            BTreeSet::from([1735689600_i64, 1735693200_i64, 1735696800_i64, 1735700400_i64]);
+        let mut cache = HashMap::new();
+
+        let stats = read_trade_interval_csv(
+            &mut reader,
+            "XBTEUR.csv",
+            "XXBTZEUR",
+            1735689600,
+            1735704000,
+            240,
+            60,
+            &mut missing_hours,
+            &mut cache,
+        )
+        .expect("csv should parse");
+
+        let vwap = (100.0 * 1.0 + 140.0 * 3.0) / 4.0;
+        assert_eq!(stats.inserted, 4);
+        assert_eq!(stats.replaced, 0);
+        assert_eq!(stats.skipped, 0);
+        assert_eq!(cache["XXBTZEUR:60:1735689600"], super::normalize_fiat_rate(vwap));
+        assert_eq!(cache["XXBTZEUR:60:1735693200"], super::normalize_fiat_rate(vwap));
+        assert_eq!(cache["XXBTZEUR:60:1735696800"], super::normalize_fiat_rate(vwap));
+        assert_eq!(cache["XXBTZEUR:60:1735700400"], super::normalize_fiat_rate(vwap));
+        assert!(missing_hours.is_empty());
+    }
+
+    #[test]
+    fn larger_trade_candle_fills_missing_interior_smaller_intervals() {
+        let trades = "\
+1735689900,100.0,1.0
+1735697100,140.0,3.0
+";
+        let mut reader = csv::ReaderBuilder::new()
+            .has_headers(false)
+            .from_reader(Cursor::new(trades));
+        let mut missing_hours = BTreeSet::from([1735693200_i64, 1735696800_i64]);
+        let mut cache = HashMap::new();
+
+        let stats = read_trade_interval_csv(
+            &mut reader,
+            "XBTEUR.csv",
+            "XXBTZEUR",
+            1735689600,
+            1735704000,
+            240,
+            60,
+            &mut missing_hours,
+            &mut cache,
+        )
+        .expect("csv should parse");
+
+        let vwap = (100.0 * 1.0 + 140.0 * 3.0) / 4.0;
+        assert_eq!(stats.inserted, 2);
+        assert_eq!(stats.replaced, 0);
+        assert_eq!(stats.skipped, 0);
+        assert_eq!(cache["XXBTZEUR:60:1735693200"], super::normalize_fiat_rate(vwap));
+        assert_eq!(cache["XXBTZEUR:60:1735696800"], super::normalize_fiat_rate(vwap));
+        assert!(missing_hours.is_empty());
+    }
+
+    #[test]
+    fn trade_vwap_replaces_existing_cache_entry() {
+        let mut reader = csv::ReaderBuilder::new()
+            .has_headers(false)
+            .from_reader(Cursor::new(REAL_XBTEUR_TRADES_SAMPLE));
+        let mut missing_days = BTreeSet::from([1735689600_i64]);
+        let mut cache = HashMap::from([("XXBTZEUR:1440:1735689600".to_owned(), 1.23_f64)]);
+
+        let stats = read_trade_interval_csv(
+            &mut reader,
+            "XBTEUR.csv",
+            "XXBTZEUR",
+            1735689600,
+            1735776000,
+            1440,
+            1440,
+            &mut missing_days,
+            &mut cache,
+        )
+        .expect("csv should parse");
+
+        assert_eq!(stats.inserted, 0);
+        assert_eq!(stats.replaced, 1);
+        assert_eq!(stats.skipped, 0);
+        assert_ne!(cache["XXBTZEUR:1440:1735689600"], 1.23);
+        assert!(missing_days.is_empty());
+    }
+
+    #[test]
+    fn trade_vwap_skips_existing_entry_when_value_is_unchanged() {
+        let mut reader = csv::ReaderBuilder::new()
+            .has_headers(false)
+            .from_reader(Cursor::new(REAL_XBTEUR_TRADES_SAMPLE));
+        let day1 = ((90167.3 * 0.00054633) + (90167.3 * 0.00005463) + (90167.1 * 0.00002185))
+            / (0.00054633 + 0.00005463 + 0.00002185);
+        let mut missing_days = BTreeSet::from([1735689600_i64]);
+        let mut cache = HashMap::from([("XXBTZEUR:1440:1735689600".to_owned(), day1)]);
+
+        let stats = read_trade_interval_csv(
+            &mut reader,
+            "XBTEUR.csv",
+            "XXBTZEUR",
+            1735689600,
+            1735776000,
+            1440,
+            1440,
+            &mut missing_days,
+            &mut cache,
+        )
+        .expect("csv should parse");
+
+        assert_eq!(stats.inserted, 0);
+        assert_eq!(stats.replaced, 0);
+        assert_eq!(stats.skipped, 1);
+        assert_eq!(cache["XXBTZEUR:1440:1735689600"], super::normalize_fiat_rate(day1));
+        assert!(missing_days.is_empty());
+    }
+
+    #[test]
+    fn trade_archive_fixture_produces_expected_hourly_vwap_candles() {
+        let mut reader = csv::ReaderBuilder::new()
+            .has_headers(false)
+            .from_reader(Cursor::new(REAL_XBTEUR_2026_03_21_TRADES));
+        // 2026-03-21 02:00–04:59 UTC — three quiet hours from real Kraken trades.
+        // API 60-min OHLC VWAPs for this window: 60995.3, 61074.2, 61145.7
+        let mut missing_hours =
+            BTreeSet::from([1774058400_i64, 1774062000_i64, 1774065600_i64]);
+        let mut cache = HashMap::new();
+
+        let stats = read_trade_interval_csv(
+            &mut reader,
+            "XBTEUR.csv",
+            "XXBTZEUR",
+            1774058400,
+            1774069200,
+            60,
+            60,
+            &mut missing_hours,
+            &mut cache,
+        )
+        .expect("csv should parse");
+
+        assert_eq!(stats.inserted, 3);
+        assert_eq!(stats.replaced, 0);
+        assert_eq!(stats.skipped, 0);
+        assert_eq!(cache["XXBTZEUR:60:1774058400"], super::normalize_fiat_rate(60995.38));
+        assert_eq!(cache["XXBTZEUR:60:1774062000"], super::normalize_fiat_rate(61074.23));
+        assert_eq!(cache["XXBTZEUR:60:1774065600"], super::normalize_fiat_rate(61145.71));
+        assert!(missing_hours.is_empty());
+    }
+
+    #[test]
+    fn reports_missing_trade_volume_clearly() {
+        let mut reader = csv::ReaderBuilder::new()
+            .has_headers(false)
+            .from_reader(Cursor::new("1735689600,90167.3\n"));
+        let mut missing_days = BTreeSet::from([1735689600_i64]);
+        let mut cache = HashMap::new();
+
+        let err = read_trade_interval_csv(
+            &mut reader,
+            "XBTEUR.csv",
+            "XXBTZEUR",
+            1735689600,
+            1735776000,
+            1440,
+            1440,
+            &mut missing_days,
+            &mut cache,
+        )
+        .expect_err("row should fail");
+
+        assert!(err
+            .to_string()
+            .contains("XBTEUR.csv row is missing the volume column"));
+    }
+
+    #[test]
+    fn reports_invalid_trade_volume_clearly() {
+        let mut reader = csv::ReaderBuilder::new()
+            .has_headers(false)
+            .from_reader(Cursor::new("1735689600,90167.3,nope\n"));
+        let mut missing_days = BTreeSet::from([1735689600_i64]);
+        let mut cache = HashMap::new();
+
+        let err = read_trade_interval_csv(
+            &mut reader,
+            "XBTEUR.csv",
+            "XXBTZEUR",
+            1735689600,
+            1735776000,
+            1440,
+            1440,
+            &mut missing_days,
+            &mut cache,
+        )
+        .expect_err("row should fail");
+
+        assert!(err
+            .to_string()
+            .contains("invalid volume value nope in XBTEUR.csv"));
+    }
+
+    #[test]
+    fn reuses_existing_archive_download_without_redownloading() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("btc-accounting-archive-{unique}.zip"));
+        let cursor = Cursor::new(Vec::<u8>::new());
+        let mut writer = zip::ZipWriter::new(cursor);
+        let options: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default();
+        writer
+            .start_file("XBTEUR.csv", options)
+            .expect("start file");
+        std::io::Write::write_all(&mut writer, b"1735689600,90167.3,0.1\n").expect("write file");
+        let cursor = writer.finish().expect("finish zip");
+        std::fs::write(&path, cursor.into_inner()).expect("fixture");
+        let extracted_path = extracted_archive_entry_path("unused.zip", "XBTEUR.csv");
+
+        let result = ensure_archive_downloaded(
+            &reqwest::blocking::Client::new(),
+            &DriveFile {
+                id: "unused".to_owned(),
+                name: "unused.zip".to_owned(),
+            },
+            &path,
+            super::ArchiveBackfillMode::Vwap,
+            "XBTEUR",
+            1735776000,
+            1440,
+        );
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&extracted_path);
+        assert_eq!(
+            result.expect("result"),
+            PreparedArchive {
+                archive_path: path,
+                archive_file_name: "unused.zip".to_owned(),
+                extracted_path,
+            }
+        );
     }
 
     #[test]
