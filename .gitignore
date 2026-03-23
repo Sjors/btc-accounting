@@ -2,6 +2,7 @@
 .cache/
 target/
 AGENTS.md
+.claude
 
 # Symlink to Bitcoin Core
 bitcoin-core
