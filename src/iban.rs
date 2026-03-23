@@ -1,9 +1,11 @@
-use anyhow::Result;
+use anyhow::{Result, bail};
 
 /// Bank code for mainnet IBANs.
 const BANK_CODE_MAIN: &str = "XBTC";
 /// Bank code for test-network IBANs (regtest, testnet3, testnet4, signet).
 const BANK_CODE_TEST: &str = "TBTC";
+/// Bank code for Lightning Network IBANs (all networks).
+const BANK_CODE_LIGHTNING: &str = "LNBT";
 
 /// Generate a deterministic IBAN from a wallet fingerprint.
 ///
@@ -22,6 +24,23 @@ pub fn iban_from_fingerprint(fingerprint_hex: &str, country: &str, chain: &str) 
     let fp_decimal = format!("{fp:010}");
     let bban = format!("{bank_code}{fp_decimal}");
 
+    let iban_check = iban_mod97_check(country, &bban)?;
+    Ok(format!("{country}{iban_check:02}{bban}"))
+}
+
+/// Generate a deterministic IBAN from a phoenixd node ID.
+///
+/// Uses the first 4 bytes (8 hex chars) of the 33-byte compressed pubkey as the
+/// fingerprint and always uses the `LNBT` bank code to distinguish Lightning
+/// Network accounts from on-chain Bitcoin accounts.
+pub fn iban_from_node_id(node_id: &str, country: &str) -> Result<String> {
+    if node_id.len() < 8 {
+        bail!("node ID too short: {node_id}");
+    }
+    let fp = u32::from_str_radix(&node_id[..8], 16)
+        .map_err(|_| anyhow::anyhow!("invalid node ID (expected hex): {node_id}"))?;
+    let fp_decimal = format!("{fp:010}");
+    let bban = format!("{BANK_CODE_LIGHTNING}{fp_decimal}");
     let iban_check = iban_mod97_check(country, &bban)?;
     Ok(format!("{country}{iban_check:02}{bban}"))
 }
@@ -119,5 +138,27 @@ mod tests {
         assert_eq!(iban.len(), 18);
         let numeric = alpha_to_numeric(&format!("{}{}", &iban[4..], &iban[..4]));
         assert_eq!(mod97(&numeric), 1);
+    }
+
+    #[test]
+    fn node_id_uses_lnbt_bank_code() {
+        // ACINQ's well-known public node ID (03864ef0...)
+        let node_id = "03864ef025fde8fb587d989186ce6a4a186895ee44a926bfc370e2c366597a3f8f";
+        let iban = iban_from_node_id(node_id, "FR").unwrap();
+        assert!(iban.starts_with("FR"));
+        assert!(iban.contains("LNBT"), "IBAN should use LNBT bank code: {iban}");
+        assert_eq!(iban.len(), 18);
+        let numeric = alpha_to_numeric(&format!("{}{}", &iban[4..], &iban[..4]));
+        assert_eq!(mod97(&numeric), 1, "IBAN {iban} should pass mod-97 check");
+    }
+
+    #[test]
+    fn node_id_rejects_short_input() {
+        assert!(iban_from_node_id("02eec7", "NL").is_err());
+    }
+
+    #[test]
+    fn node_id_rejects_invalid_hex() {
+        assert!(iban_from_node_id("zzzzzzzzzzzzzzzz", "NL").is_err());
     }
 }
