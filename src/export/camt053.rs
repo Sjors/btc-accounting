@@ -213,6 +213,10 @@ fn xml_escape_comment(s: &str) -> String {
 
 /// Data extracted from an existing CAMT.053 file for append mode.
 pub struct Camt053ParseResult {
+    /// Opening balance of the existing file.
+    pub opening_balance_cents: i64,
+    /// Opening balance date of the existing file.
+    pub opening_date: Option<String>,
     /// Set of NtryRef values already in the file (for dedup).
     pub existing_entry_refs: HashSet<String>,
     /// All existing entries (preserved in output).
@@ -238,6 +242,8 @@ pub fn parse_camt053(xml: &str) -> Result<Camt053ParseResult> {
 
     let mut account_iban = String::new();
     let mut currency = String::new();
+    let mut opening_balance_cents: i64 = 0;
+    let mut opening_date: Option<String> = None;
     let mut closing_balance_cents: i64 = 0;
     let mut existing_entry_refs = HashSet::new();
     let mut existing_entries = Vec::new();
@@ -262,6 +268,7 @@ pub fn parse_camt053(xml: &str) -> Result<Camt053ParseResult> {
     let mut bal_amount_cents: i64 = 0;
     let mut bal_is_credit = true;
     let mut bal_is_btc = false;
+    let mut bal_date = String::new();
 
     loop {
         match reader.read_event() {
@@ -286,6 +293,7 @@ pub fn parse_camt053(xml: &str) -> Result<Camt053ParseResult> {
                         bal_amount_cents = 0;
                         bal_is_credit = true;
                         bal_is_btc = false;
+                        bal_date.clear();
                     }
                     "Amt" if in_bal => {
                         // Skip BTC-denominated balances
@@ -316,12 +324,19 @@ pub fn parse_camt053(xml: &str) -> Result<Camt053ParseResult> {
 
                 if name == "Bal" && in_bal {
                     in_bal = false;
+                    let signed_balance = if bal_is_credit {
+                        bal_amount_cents
+                    } else {
+                        -bal_amount_cents
+                    };
+                    if bal_code == "OPBD" {
+                        opening_balance_cents = signed_balance;
+                        if !bal_date.is_empty() {
+                            opening_date = Some(bal_date.clone());
+                        }
+                    }
                     if bal_code == "CLBD" {
-                        closing_balance_cents = if bal_is_credit {
-                            bal_amount_cents
-                        } else {
-                            -bal_amount_cents
-                        };
+                        closing_balance_cents = signed_balance;
                     }
                 }
 
@@ -364,6 +379,12 @@ pub fn parse_camt053(xml: &str) -> Result<Camt053ParseResult> {
                             bal_amount_cents = parse_amount_cents(&text)?;
                         }
                         "CdtDbtInd" => bal_is_credit = text == "CRDT",
+                        "Dt" | "DtTm" if path_contains(&path, "Bal") && path_contains(&path, "Dt") => {
+                            let trimmed = text.trim();
+                            if bal_date.is_empty() && !trimmed.is_empty() {
+                                bal_date = trimmed.to_owned();
+                            }
+                        }
                         _ => {}
                     }
                 } else {
@@ -405,6 +426,8 @@ pub fn parse_camt053(xml: &str) -> Result<Camt053ParseResult> {
         .map(|e| booking_date_to_date(&e.booking_date).to_owned());
 
     Ok(Camt053ParseResult {
+        opening_balance_cents,
+        opening_date,
         existing_entry_refs,
         existing_entries,
         closing_balance_cents,
@@ -557,6 +580,8 @@ mod tests {
 
         assert_eq!(parsed.account_iban, "NL00XBTC0000000000");
         assert_eq!(parsed.currency, "EUR");
+        assert_eq!(parsed.opening_balance_cents, 0);
+        assert_eq!(parsed.opening_date, Some("2025-01-02".to_owned()));
         assert_eq!(parsed.closing_balance_cents, 499_985);
         assert_eq!(parsed.existing_entry_refs.len(), 2);
         assert!(parsed.existing_entry_refs.contains("100:abcdef01234567890abc:0"));
