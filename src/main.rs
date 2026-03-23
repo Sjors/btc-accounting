@@ -3,11 +3,12 @@ use std::env;
 use anyhow::{Result, anyhow, bail};
 use dotenvy::dotenv;
 
+use btc_fiat_value::commands::cache_rates::{self as cache_rates_cmd, CacheRatesArgs};
 use btc_fiat_value::commands::export::{self as export_cmd, ExportArgs};
 use btc_fiat_value::commands::received_value::{self, ReceivedValueArgs};
 use btc_fiat_value::commands::reconstruct::{self as reconstruct_cmd, ReconstructArgs};
 
-const ROOT_USAGE: &str = "usage: btc_fiat_value <command> [options]\n\nsubcommands:\n  received-value  find the quote-currency value when BTC was received\n  export          export wallet transactions to accounting format\n  reconstruct     verify an export by reconstructing the wallet";
+const ROOT_USAGE: &str = "usage: btc_fiat_value <command> [options]\n\nsubcommands:\n  received-value  find the quote-currency value when BTC was received\n  cache-rates     populate .cache/rates.json for one year of rates\n  export          export wallet transactions to accounting format\n  reconstruct     verify an export by reconstructing the wallet";
 
 fn main() {
     if let Err(err) = run() {
@@ -20,6 +21,7 @@ fn run() -> Result<()> {
     let _ = dotenv();
     match parse_command()? {
         Command::ReceivedValue(args) => received_value::run(args),
+        Command::CacheRates(args) => cache_rates_cmd::run(args),
         Command::Export(args) => export_cmd::run(args),
         Command::Reconstruct(args) => reconstruct_cmd::run(args),
     }
@@ -28,6 +30,7 @@ fn run() -> Result<()> {
 #[derive(Debug)]
 enum Command {
     ReceivedValue(ReceivedValueArgs),
+    CacheRates(CacheRatesArgs),
     Export(ExportArgs),
     Reconstruct(ReconstructArgs),
 }
@@ -46,6 +49,9 @@ where
     match first.as_str() {
         received_value::SUBCOMMAND_NAME => Ok(Command::ReceivedValue(
             received_value::parse_args_from(args, received_value::USAGE)?,
+        )),
+        cache_rates_cmd::SUBCOMMAND_NAME => Ok(Command::CacheRates(
+            cache_rates_cmd::parse_args_from(args, cache_rates_cmd::USAGE)?,
         )),
         export_cmd::SUBCOMMAND_NAME => Ok(Command::Export(
             export_cmd::parse_args_from(args, export_cmd::USAGE)?,
@@ -104,6 +110,19 @@ mod tests {
                 assert!(args.fiat_mode);
             }
             _ => panic!("expected Export"),
+        }
+    }
+
+    #[test]
+    fn parses_cache_rates_subcommand() {
+        let command = parse_command_from(vec!["cache-rates".to_owned(), "2024".to_owned()])
+            .expect("command");
+
+        match command {
+            Command::CacheRates(args) => {
+                assert_eq!(args.year, 2024);
+            }
+            _ => panic!("expected CacheRates"),
         }
     }
 

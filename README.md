@@ -2,7 +2,7 @@
 
 Rust CLI for Bitcoin accounting tasks.
 
-Current commands: `received-value`, `export`, `reconstruct`.
+Current commands: `received-value`, `cache-rates`, `export`, `reconstruct`.
 
 ## Available commands
 
@@ -17,6 +17,29 @@ The command works as follows:
 3. Fetches Kraken price data.
 4. Uses the smallest Kraken `OHLC` candle interval that can still cover the transaction confirmation time (override with `--candle <minutes>`).
 5. Estimates the value of the received BTC in the quote currency of the chosen Kraken pair.
+
+### `cache-rates`
+
+Populate `.cache/rates.json` for one UTC calendar year of Bitcoin rates.
+
+```bash
+cargo run -- cache-rates 2024
+```
+
+The command works as follows:
+
+1. Fetches the daily (`1440`) Kraken `OHLC` data that is still available through the public API.
+2. Detects which closed UTC daily candles in the requested year are still missing because they are older than Kraken's 720-candle retention window.
+3. Backfills those missing days into `.cache/rates.json` from Kraken's downloadable OHLCVT archive.
+
+The cache keys are written as `1440`-minute entries.
+
+Trade-off:
+
+- Recent days use Kraken's daily `OHLC` API `vwap`, just like the normal live lookup path.
+- Older archive-backed days use the daily `(open + close) / 2` midpoint derived from Kraken's OHLCVT CSV, because the downloadable OHLCVT archive does not include `vwap`.
+- The command only fills missing cache entries for that year and interval; it does not overwrite existing entries with midpoint-derived values.
+- Downloaded Kraken archive ZIPs are kept under `.cache/kraken/` and reused across later runs; the command does not keep expanded CSV files on disk.
 
 ### `export`
 
@@ -169,6 +192,8 @@ transaction_age <= 720 * interval_minutes * 60
 
 If the transaction is too old to fit inside Kraken's `1d` candle retention window, the tool exits with an error instead of silently switching to a coarser interval.
 
+`cache-rates` is the explicit opt-in workaround for older values: it backfills `.cache/rates.json` from Kraken's OHLCVT archive as daily `(open + close) / 2` midpoint prices.
+
 ## Development
 
 See [DEVELOP.md](DEVELOP.md) for Bitcoin Core build instructions, running
@@ -192,6 +217,7 @@ Licensed under the MIT License. See `LICENSE` for details.
 - `src/main.rs` — top-level command dispatcher
 - `src/lib.rs` — library crate root
 - `src/commands/received_value.rs` — `received-value` subcommand
+- `src/commands/cache_rates.rs` — `cache-rates` subcommand
 - `src/commands/export.rs` — `export` subcommand
 - `src/commands/reconstruct.rs` — `reconstruct` subcommand
 - `src/common.rs` — shared config, mempool, Kraken, Tor, candle, and formatting logic
