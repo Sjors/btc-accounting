@@ -41,3 +41,5 @@ jobs:
         run: cargo test
       - name: Validate CAMT.053 Fixture
         run: xmllint --schema tests/fixtures/camt.053.001.02.xsd tests/fixtures/salary_2025_camt053.xml --noout
+      - name: Validate Phoenixd CAMT.053 Fixture
+        run: xmllint --schema tests/fixtures/camt.053.001.02.xsd tests/fixtures/phoenixd_sample_camt053.xml --noout

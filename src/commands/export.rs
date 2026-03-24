@@ -2,7 +2,7 @@ use std::env;
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::BufWriter;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use chrono::{Duration, NaiveDate};
@@ -15,10 +15,11 @@ use crate::export::camt053::Camt053ParseResult;
 use crate::exchange_rate::KrakenProvider;
 use crate::export::camt053::Camt053Exporter;
 use crate::export::AccountingExporter;
-use crate::iban::iban_from_fingerprint;
+use crate::iban::{iban_from_fingerprint, iban_from_node_id};
 use crate::import::WalletTransaction;
 use crate::import::TransactionSource;
 use crate::import::bitcoin_core_rpc::BitcoinCoreRpc;
+use crate::import::phoenixd_csv::PhoenixdCsv;
 
 pub const SUBCOMMAND_NAME: &str = "export";
 
@@ -39,6 +40,8 @@ options:
   --bank-name <name>    Bank/institution name (default: Bitcoin Core - <wallet>)
   --candle <minutes>    Kraken candle interval (default: DEFAULT_CANDLE_MINUTES or 1440)
   --fee-threshold-cents <n>  Fold fees below this threshold into the parent entry description (default: 1)
+  --phoenixd-csv <file>  Use a Phoenixd CSV export as the transaction source
+  --nodeid <id>         Phoenixd node public key (from: phoenix-cli getinfo); cached in .cache/phoenixd_node.txt
   --ignore-balance-mismatch  Warn instead of error on forward/backward balance mismatch";
 
 #[derive(Debug, PartialEq, Eq)]
@@ -56,6 +59,8 @@ pub struct ExportArgs {
     pub candle_override_minutes: Option<u32>,
     pub bank_name: Option<String>,
     pub ignore_balance_mismatch: bool,
+    pub phoenixd_csv: Option<PathBuf>,
+    pub node_id: Option<String>,
     pub fee_threshold_cents: Option<i64>,
 }
 
@@ -83,37 +88,12 @@ enum ExistingMergeMode {
 }
 
 pub fn run(args: ExportArgs) -> Result<()> {
-    // Resolve wallet name: use provided, or auto-detect the single loaded wallet
-    let wallet = match args.wallet {
-        Some(w) => w,
-        None => {
-            let rpc_url = crate::import::bitcoin_core_rpc::rpc_url_for_chain(&args.chain)?;
-            let cookie_path = crate::import::bitcoin_core_rpc::cookie_path(&args.datadir, &args.chain);
-            let cookie = std::fs::read_to_string(&cookie_path)
-                .with_context(|| format!("failed to read cookie file at {}", cookie_path.display()))?;
-            let wallets = BitcoinCoreRpc::list_wallets(&rpc_url, &cookie)?;
-            match wallets.len() {
-                0 => bail!("no wallets loaded; specify --wallet"),
-                1 => wallets.into_iter().next().unwrap(),
-                n => bail!("{n} wallets loaded ({}) — specify --wallet", wallets.join(", ")),
-            }
-        }
-    };
-
-    let rpc = BitcoinCoreRpc::new(&wallet, &args.datadir, &args.chain)?;
-    let fingerprint = rpc.get_fingerprint()?;
-    let iban = iban_from_fingerprint(&fingerprint, &args.country, &args.chain)?;
-    eprintln!("Virtual IBAN: {iban}");
-
-    let mut transactions = rpc.list_transactions()?;
-    let wallet_balance_sats = rpc.get_balance()?;
-
-    // Collect receive addresses and fetch matching watch-only descriptors
-    let receive_addresses: std::collections::HashSet<String> = transactions.iter()
-        .filter(|tx| tx.category == crate::import::TxCategory::Receive)
-        .map(|tx| tx.address.clone())
-        .collect();
-    let descriptors = rpc.get_receive_descriptors(&receive_addresses)?;
+    let (iban, mut transactions, wallet_balance_sats, descriptors, bank_name_default) =
+        if let Some(ref csv_path) = args.phoenixd_csv {
+            run_phoenixd_source(csv_path, &args)?
+        } else {
+            run_bitcoin_core_source(&args)?
+        };
 
     let app_config = AppConfig::from_env()?;
     let candle_minutes = resolve_candle_minutes(
@@ -182,7 +162,7 @@ pub fn run(args: ExportArgs) -> Result<()> {
         .map(|plan| plan.existing_entry_refs.clone())
         .unwrap_or_default();
 
-    let bank_name = Some(args.bank_name.unwrap_or_else(|| format!("Bitcoin Core - {wallet}")));
+    let bank_name = Some(args.bank_name.unwrap_or(bank_name_default));
 
     let config = AccountingConfig {
         fiat_mode: args.fiat_mode,
@@ -203,10 +183,11 @@ pub fn run(args: ExportArgs) -> Result<()> {
         wallet_balance_sats: if existing_plan
             .as_ref()
             .is_some_and(|plan| plan.merge_mode == ExistingMergeMode::Prepend)
+            || transactions.is_empty()
         {
             None
         } else {
-            Some(wallet_balance_sats)
+            wallet_balance_sats
         },
         ignore_balance_mismatch: args.ignore_balance_mismatch,
         fee_threshold_cents: args.fee_threshold_cents.unwrap_or(1),
@@ -281,6 +262,84 @@ pub fn run(args: ExportArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Return type for the two source functions:
+/// (iban, transactions, wallet_balance_sats, descriptors, bank_name_default)
+type SourceResult = (String, Vec<WalletTransaction>, Option<i64>, Vec<String>, String);
+
+fn run_bitcoin_core_source(args: &ExportArgs) -> Result<SourceResult> {
+    let wallet = match &args.wallet {
+        Some(w) => w.clone(),
+        None => {
+            let rpc_url = crate::import::bitcoin_core_rpc::rpc_url_for_chain(&args.chain)?;
+            let cookie_path = crate::import::bitcoin_core_rpc::cookie_path(&args.datadir, &args.chain);
+            let cookie = std::fs::read_to_string(&cookie_path)
+                .with_context(|| format!("failed to read cookie file at {}", cookie_path.display()))?;
+            let wallets = BitcoinCoreRpc::list_wallets(&rpc_url, &cookie)?;
+            match wallets.len() {
+                0 => bail!("no wallets loaded; specify --wallet"),
+                1 => wallets.into_iter().next().unwrap(),
+                n => bail!("{n} wallets loaded ({}) — specify --wallet", wallets.join(", ")),
+            }
+        }
+    };
+
+    let rpc = BitcoinCoreRpc::new(&wallet, &args.datadir, &args.chain)?;
+    let fingerprint = rpc.get_fingerprint()?;
+    let iban = iban_from_fingerprint(&fingerprint, &args.country, &args.chain)?;
+    eprintln!("Virtual IBAN: {iban}");
+
+    let transactions = rpc.list_transactions()?;
+    let wallet_balance_sats = Some(rpc.get_balance()?);
+
+    let receive_addresses: std::collections::HashSet<String> = transactions.iter()
+        .filter(|tx| tx.category == crate::import::TxCategory::Receive)
+        .map(|tx| tx.address.clone())
+        .collect();
+    let descriptors = rpc.get_receive_descriptors(&receive_addresses)?;
+
+    let bank_name_default = format!("Bitcoin Core - {wallet}");
+
+    Ok((iban, transactions, wallet_balance_sats, descriptors, bank_name_default))
+}
+
+fn phoenixd_node_cache_path() -> std::path::PathBuf {
+    std::path::PathBuf::from(crate::exchange_rate::CACHE_DIR).join("phoenixd_node.txt")
+}
+
+fn run_phoenixd_source(csv_path: &Path, args: &ExportArgs) -> Result<SourceResult> {
+    let source = PhoenixdCsv::from_path(csv_path)?;
+    let wallet_balance_sats = source.wallet_balance_sats();
+    let transactions = source.list_transactions()?;
+
+    // Resolve node ID: CLI flag > cache file
+    let node_id = match &args.node_id {
+        Some(id) => {
+            let path = phoenixd_node_cache_path();
+            std::fs::create_dir_all(crate::exchange_rate::CACHE_DIR).ok();
+            std::fs::write(&path, id)
+                .with_context(|| format!("failed to cache node ID at {}", path.display()))?;
+            id.clone()
+        }
+        None => {
+            let path = phoenixd_node_cache_path();
+            std::fs::read_to_string(&path)
+                .ok()
+                .map(|s| s.trim().to_owned())
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| anyhow::anyhow!(
+                    "no node ID available; pass --nodeid <id> (find it with: phoenix-cli getinfo)"
+                ))?
+        }
+    };
+
+    let iban = iban_from_node_id(&node_id, &args.country)?;
+    eprintln!("Virtual IBAN: {iban}");
+
+    let bank_name_default = format!("Phoenixd - {node_id}");
+
+    Ok((iban, transactions, Some(wallet_balance_sats), vec![], bank_name_default))
 }
 
 fn quote_currency_from_pair(pair: &str) -> String {
@@ -426,6 +485,8 @@ where
     let mut candle_minutes: Option<u32> = None;
     let mut bank_name: Option<String> = None;
     let mut ignore_balance_mismatch = false;
+    let mut phoenixd_csv: Option<PathBuf> = None;
+    let mut node_id: Option<String> = None;
     let mut fee_threshold_cents: Option<i64> = None;
 
     while let Some(arg) = args.next() {
@@ -468,6 +529,12 @@ where
             "--bank-name" => {
                 bank_name = Some(args.next().ok_or_else(|| anyhow::anyhow!("--bank-name requires a value\n\n{usage}"))?);
             }
+            "--phoenixd-csv" => {
+                phoenixd_csv = Some(PathBuf::from(args.next().ok_or_else(|| anyhow::anyhow!("--phoenixd-csv requires a value\n\n{usage}"))?));
+            }
+            "--nodeid" => {
+                node_id = Some(args.next().ok_or_else(|| anyhow::anyhow!("--nodeid requires a value\n\n{usage}"))?);
+            }
             "--ignore-balance-mismatch" => ignore_balance_mismatch = true,
             "--fee-threshold-cents" => {
                 let val = args.next().ok_or_else(|| anyhow::anyhow!("--fee-threshold-cents requires a value\n\n{usage}"))?;
@@ -485,6 +552,8 @@ where
                         "--output" => output = Some(PathBuf::from(value)),
                         "--candle" => candle_minutes = Some(crate::common::parse_candle_interval_minutes(value, "--candle")?),
                         "--bank-name" => bank_name = Some(value.to_owned()),
+                        "--phoenixd-csv" => phoenixd_csv = Some(PathBuf::from(value)),
+                        "--nodeid" => node_id = Some(value.to_owned()),
                         "--fee-threshold-cents" => {
                             fee_threshold_cents = Some(value.parse::<i64>().with_context(|| format!("invalid --fee-threshold-cents: {value}"))?);
                         }
@@ -549,6 +618,8 @@ where
         candle_override_minutes: candle_minutes,
         bank_name,
         ignore_balance_mismatch,
+        phoenixd_csv,
+        node_id,
         fee_threshold_cents,
     })
 }
@@ -599,6 +670,8 @@ mod tests {
                 candle_override_minutes: None,
                 bank_name: None,
                 ignore_balance_mismatch: false,
+                phoenixd_csv: None,
+                node_id: None,
                 fee_threshold_cents: None,
             }
         );

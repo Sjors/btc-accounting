@@ -66,11 +66,19 @@ But it does mean VWAP values can be constructed as far back as late 2013.
 
 Export wallet transactions to CAMT.053 accounting format.
 
-Reads transactions from a Bitcoin Core wallet via JSON-RPC, converts them to a CAMT.053 XML bank statement. Supports fiat conversion at spot rates, optional FIFO realized gain/loss entries, and mark-to-market year-end reconciliation. If the output file already exists, new transactions are appended (deduplication by entry reference).
+Reads transactions from a [Bitcoin Core](https://bitcoincore.org/en/download/) wallet via JSON-RPC or a [phoenixd](https://phoenix.acinq.co/server) CSV export, converts them to a CAMT.053 XML bank statement. Supports fiat conversion at spot rates, optional FIFO realized gain/loss entries, and mark-to-market year-end reconciliation. If the output file already exists, new transactions are appended (deduplication by entry reference).
 
 ```bash
+# Bitcoin Core wallet (via JSON-RPC)
 cargo run -- export --country NL --wallet mywallet --datadir ~/.bitcoin --output statement.xml
+
+# Phoenixd Lightning wallet (via CSV export)
+phoenix-cli exportcsv
+cargo run -- export --country FR --phoenixd-csv payments.csv --nodeid 03864e... --output lightning.xml
 ```
+
+The `--nodeid` is only needed on first run; it is cached in `.cache/phoenixd_node.txt`.
+Get it with `phoenix-cli getinfo`.
 
 Key options:
 - `--country <CC>` — IBAN country code, e.g. NL (required; env: `IBAN_COUNTRY`)
@@ -81,10 +89,13 @@ Key options:
 - `--output <file>` — output file path (appends if file exists)
 - `--start-date <YYYY-MM-DD>` — only include transactions from this date
 - `--candle <minutes>` — Kraken candle interval (`DEFAULT_CANDLE_MINUTES` or `1440` by default)
+- `--fee-threshold-cents <n>` — fold fees below this threshold into the parent entry description (default: 1)
+- `--phoenixd-csv <file>` — use a phoenixd CSV export as the transaction source (instead of Bitcoin Core RPC)
+- `--nodeid <id>` — phoenixd node public key (cached after first use; find it with `phoenix-cli getinfo`)
 - `--datadir <path>` — Bitcoin Core data directory (for cookie auth)
 - `--chain <name>` — chain: main, testnet3, testnet4, signet, regtest (default: main)
 
-The IBAN in the output is generated deterministically from the wallet's master fingerprint. The bank code is `XBTC` on mainnet, `TBTC` on test networks. The BIC in the XML servicer field is derived from the IBAN (e.g. `XBTCNL2A`).
+The IBAN in the output is generated deterministically from the wallet's master fingerprint (on-chain) or the node public key (Lightning). The bank code is `XBTC` on mainnet, `TBTC` on test networks, and `LNBT` for Lightning. The BIC in the XML servicer field is derived from the IBAN (e.g. `XBTCNL2A` or `LNBTFR2A`).
 
 The generated XML conforms to the CAMT.053.001.02 schema (ISO 20022) and validates against the official XSD. Each entry contains enough information to map back to the original Bitcoin transaction (block hash, txid, vout).
 
@@ -236,5 +247,6 @@ Licensed under the MIT License. See `LICENSE` for details.
 - `src/exchange_rate.rs` — ExchangeRateProvider trait and KrakenProvider
 - `src/export/camt053.rs` — CAMT.053 XML generation and parsing
 - `src/import/bitcoin_core_rpc.rs` — Bitcoin Core JSON-RPC client
-- `src/iban.rs` — deterministic IBAN from wallet fingerprint
+- `src/import/phoenixd_csv.rs` — phoenixd CSV export parser
+- `src/iban.rs` — deterministic IBAN from wallet fingerprint or node ID
 - `tests/regtest/` — regtest integration test infrastructure

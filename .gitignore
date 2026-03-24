@@ -4,6 +4,7 @@ target/
 AGENTS.md
 .claude
 
-# Symlink to Bitcoin Core
+# Symlink to applications
 bitcoin-core
+phoenixd
 
