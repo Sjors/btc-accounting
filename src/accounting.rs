@@ -5,7 +5,7 @@ use chrono::{DateTime, Datelike, NaiveDate, Utc};
 
 use crate::exchange_rate::ExchangeRateProvider;
 use crate::export::{Entry, Statement, booking_date_to_date};
-use crate::import::{TxCategory, WalletTransaction};
+use crate::import::{TxCategory, TxKind, WalletTransaction};
 
 /// Configuration for the accounting engine.
 pub struct AccountingConfig {
@@ -519,6 +519,8 @@ mod tests {
             block_hash: "bb".repeat(32),
             address: "bc1qtest".to_owned(),
             label: String::new(),
+            payment_hash: None,
+            kind: TxKind::Default,
         }
     }
 
@@ -534,6 +536,8 @@ mod tests {
             block_hash: "dd".repeat(32),
             address: "bc1qother".to_owned(),
             label: String::new(),
+            payment_hash: None,
+            kind: TxKind::Default,
         }
     }
 

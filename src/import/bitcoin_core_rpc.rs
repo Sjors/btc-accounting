@@ -281,6 +281,8 @@ impl TransactionSource for BitcoinCoreRpc {
                     block_hash: tx.blockhash.clone().unwrap_or_default(),
                     address: tx.address.clone().unwrap_or_default(),
                     label: tx.label.clone().unwrap_or_default(),
+                    payment_hash: None,
+                    kind: super::TxKind::Default,
                 });
             }
 

@@ -9,6 +9,15 @@ pub enum TxCategory {
     Receive,
 }
 
+/// Distinguishes transactions that need special accounting treatment.
+#[derive(Clone, Debug)]
+pub enum TxKind {
+    /// Standard on-chain or lightning transaction.
+    Default,
+    /// Liquidity purchase fee — description is pre-formatted by the parser.
+    LiquidityPurchase { description: String },
+}
+
 /// A wallet transaction with all data needed for accounting.
 #[derive(Clone, Debug)]
 pub struct WalletTransaction {
@@ -24,6 +33,9 @@ pub struct WalletTransaction {
     pub address: String,
     /// Address label or transaction comment (from Bitcoin Core).
     pub label: String,
+    /// Lightning payment hash for invoice matching (hex, 32 bytes).
+    pub payment_hash: Option<String>,
+    pub kind: TxKind,
 }
 
 /// Source of wallet transactions.

@@ -747,6 +747,8 @@ mod tests {
             block_hash: "bb".repeat(32),
             address: "bc1qtest".to_owned(),
             label: String::new(),
+            payment_hash: None,
+            kind: crate::import::TxKind::Default,
         };
 
         assert_eq!(transaction_entry_ref(&tx), "123:abcdef0123456789abcd:7");
