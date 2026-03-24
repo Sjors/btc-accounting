@@ -1,4 +1,5 @@
 pub mod bitcoin_core_rpc;
+pub mod phoenixd_csv;
 
 use anyhow::Result;
 
