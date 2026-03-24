@@ -249,13 +249,17 @@ pub fn run(args: ExportArgs) -> Result<()> {
     }
 
     // Summary
+    let closing_note = format!(
+        "{} closing balance {} sat",
+        &statement.statement_date, statement.closing_balance_sats,
+    );
     if new_tx_count > 0 {
         if let (Some(first), Some(last)) = (first_date, last_date) {
             let extras = match (new_fifo_count, new_mtm_count) {
                 (0, 0) => String::new(),
-                (f, 0) => format!(" ({f} FIFO gain/loss)"),
-                (0, m) => format!(" ({m} mark-to-market)"),
-                (f, m) => format!(" ({f} FIFO gain/loss, {m} mark-to-market)"),
+                (f, 0) => format!(" ({f} FIFO gain/loss, {closing_note})"),
+                (0, m) => format!(" ({m} mark-to-market, {closing_note})"),
+                (f, m) => format!(" ({f} FIFO gain/loss, {m} mark-to-market, {closing_note})"),
             };
             if first == last {
                 eprintln!("Exported {new_tx_count} transaction(s) from {first}.{extras}");

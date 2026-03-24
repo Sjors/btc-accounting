@@ -395,6 +395,7 @@ pub fn build_statement(
         opening_rate,
         entries,
         closing_balance_cents: balance_cents,
+        closing_balance_sats: balance_sats,
         opening_date,
         statement_date,
         statement_id,

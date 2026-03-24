@@ -497,6 +497,7 @@ mod tests {
                 },
             ],
             closing_balance_cents: 499_985,
+            closing_balance_sats: 5_262_158,
             opening_date: "2025-01-02".to_owned(),
             statement_date: "2025-01-02".to_owned(),
             statement_id: "STMT-2025-01-02".to_owned(),

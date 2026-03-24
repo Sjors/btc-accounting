@@ -35,6 +35,8 @@ pub struct Statement {
     pub opening_rate: Option<f64>,
     pub entries: Vec<Entry>,
     pub closing_balance_cents: i64,
+    /// Closing BTC balance in satoshis.
+    pub closing_balance_sats: i64,
     /// ISO date of the opening balance (= start_date or first entry date).
     pub opening_date: String,
     /// ISO date: YYYY-MM-DD
