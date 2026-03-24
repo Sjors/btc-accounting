@@ -27,6 +27,9 @@ pub struct AccountingConfig {
     pub wallet_balance_sats: Option<i64>,
     /// If true, warn instead of error on forward/backward balance mismatch.
     pub ignore_balance_mismatch: bool,
+    /// Fee entries below this many fiat cents are folded into the transaction
+    /// description instead of being emitted as separate entries. Default: 1.
+    pub fee_threshold_cents: i64,
 }
 
 /// A FIFO lot: tracks remaining satoshis and their cost basis.
@@ -175,8 +178,9 @@ pub fn build_statement(
                 let entry_ref = format_entry_ref(tx.block_height, &tx.txid, tx.vout);
                 let full_ref = format_full_ref(&tx.block_hash, &tx.txid, tx.vout);
 
-                let label = if tx.label.is_empty() { &tx.address } else { &tx.label };
-                let description = format_description(label, "Received", tx.amount_sats, rate_cents_per_btc);
+                let label = if tx.address.is_empty() { "" } else if tx.label.is_empty() { &tx.address } else { &tx.label };
+                let hash_suffix = tx.payment_hash.as_deref().map(|h| format!("payment hash: {h}"));
+                let description = format_description(label, "Received", tx.amount_sats, rate_cents_per_btc, hash_suffix.as_deref());
 
                 entries.push(Entry {
                     entry_ref,
@@ -198,8 +202,39 @@ pub fn build_statement(
                 let entry_ref = format_entry_ref(tx.block_height, &tx.txid, tx.vout);
                 let full_ref = format_full_ref(&tx.block_hash, &tx.txid, tx.vout);
 
-                let label = if tx.label.is_empty() { &tx.address } else { &tx.label };
-                let description = format_description(label, "Sent", abs_sats, rate_cents_per_btc);
+                // Liquidity purchase fees are emitted as a single fee entry
+                // with the mining/service breakdown in the description.
+                if let TxKind::LiquidityPurchase { ref description } = tx.kind {
+                    entries.push(Entry {
+                        entry_ref,
+                        full_ref,
+                        booking_date: booking_date.clone(),
+                        amount_cents,
+                        is_credit: false,
+                        description: description.clone(),
+                        is_fee: true,
+                    });
+                } else {
+
+                let label = if tx.address.is_empty() { "" } else if tx.label.is_empty() { &tx.address } else { &tx.label };
+                let verb = "Sent";
+                // For sub-cent fees, fold the fee mention into the description so
+                // the description reads "... BTC @ rate + N sat fee payment hash: ..." with no
+                // separate fee entry in the XML output.
+                let fee_note_str = tx.fee_sats
+                    .filter(|&f| {
+                        let abs_fee = f.unsigned_abs() as i64;
+                        abs_fee > 0 && convert_to_cents(abs_fee, rate_cents_per_btc) < config.fee_threshold_cents
+                    })
+                    .map(|f| {
+                        let abs_fee = f.unsigned_abs() as i64;
+                        match tx.payment_hash.as_deref() {
+                            Some(h) => format!("+ {abs_fee} sat fee payment hash: {h}"),
+                            None => format!("+ {abs_fee} sat fee"),
+                        }
+                    });
+                let effective_suffix = fee_note_str.or_else(|| tx.payment_hash.as_deref().map(|h| format!("payment hash: {h}")));
+                let description = format_description(label, verb, abs_sats, rate_cents_per_btc, effective_suffix.as_deref());
 
                 entries.push(Entry {
                     entry_ref,
@@ -210,6 +245,8 @@ pub fn build_statement(
                     description,
                     is_fee: false,
                 });
+
+                } // else (not LiquidityPurchase)
 
                 // FIFO: consume lots and emit realized gain/loss
                 if config.fifo && config.fiat_mode {
@@ -309,15 +346,20 @@ pub fn build_statement(
                     }
                 }
 
-                entries.push(Entry {
-                    entry_ref: format!(":{}:{}:fee", tx.block_height, &tx.txid[..20.min(tx.txid.len())]),
-                    full_ref: format!(":{}:{}:fee", tx.block_hash, tx.txid),
-                    booking_date,
-                    amount_cents: fee_cents,
-                    is_credit: false,
-                    description: format!("Mining fee ({} sat)", abs_fee),
-                    is_fee: true,
-                });
+                if fee_cents >= config.fee_threshold_cents {
+                    entries.push(Entry {
+                        entry_ref: format!(":{}:{}:fee", tx.block_height, &tx.txid[..20.min(tx.txid.len())]),
+                        full_ref: format!(":{}:{}:fee", tx.block_hash, tx.txid),
+                        booking_date,
+                        amount_cents: fee_cents,
+                        is_credit: false,
+                        description: match tx.label.as_str() {
+                            "lightning_sent" => format!("Lightning send fee ({abs_fee} sat)"),
+                            _ => format!("Mining fee ({abs_fee} sat)"),
+                        },
+                        is_fee: true,
+                    });
+                }
             }
         }
     }
@@ -475,11 +517,17 @@ fn format_full_ref(block_hash: &str, txid: &str, vout: u32) -> String {
     format!("{block_hash}:{txid}:{vout}")
 }
 
-fn format_description(label: &str, verb: &str, sats: i64, rate_cents_per_btc: Option<f64>) -> String {
+fn format_description(label: &str, verb: &str, sats: i64, rate_cents_per_btc: Option<f64>, suffix: Option<&str>) -> String {
     let btc = sats as f64 / 100_000_000.0;
-    match rate_cents_per_btc {
-        Some(rate) => format!("{label} - {verb} {btc:.8} BTC @ {rate:.2}"),
-        None => format!("{label} - {verb} {btc:.8} BTC"),
+    let prefix = if label.is_empty() { String::new() } else { format!("{label} - ") };
+    let rate_part = match rate_cents_per_btc {
+        Some(rate) => format!(" @ {rate:.2}"),
+        None => String::new(),
+    };
+    let base = format!("{prefix}{verb} {btc:.8} BTC{rate_part}");
+    match suffix {
+        Some(s) => format!("{base} {s}"),
+        None => base,
     }
 }
 
@@ -557,6 +605,7 @@ mod tests {
             bank_name: None,
             wallet_balance_sats: None,
             ignore_balance_mismatch: false,
+            fee_threshold_cents: 1,
         };
 
         let stmt = build_statement(&txs, &provider, &config).unwrap();
@@ -587,6 +636,7 @@ mod tests {
             bank_name: None,
             wallet_balance_sats: None,
             ignore_balance_mismatch: false,
+            fee_threshold_cents: 1,
         };
 
         let stmt = build_statement(&txs, &provider, &config).unwrap();
@@ -617,6 +667,7 @@ mod tests {
             bank_name: None,
             wallet_balance_sats: None,
             ignore_balance_mismatch: false,
+            fee_threshold_cents: 1,
         };
 
         let stmt = build_statement(&txs, &provider, &config).unwrap();
@@ -682,6 +733,7 @@ mod tests {
             bank_name: None,
             wallet_balance_sats: None,
             ignore_balance_mismatch: false,
+            fee_threshold_cents: 1,
         };
 
         let provider = TwoRateProvider;
@@ -735,6 +787,7 @@ mod tests {
             bank_name: None,
             wallet_balance_sats: None,
             ignore_balance_mismatch: false,
+            fee_threshold_cents: 1,
         };
 
         let provider = TwoRateProvider;
@@ -793,6 +846,7 @@ mod tests {
             bank_name: None,
             wallet_balance_sats: None,
             ignore_balance_mismatch: false,
+            fee_threshold_cents: 1,
         };
 
         let provider = TwoRateProvider;
@@ -862,6 +916,7 @@ mod tests {
             bank_name: None,
             wallet_balance_sats: None,
             ignore_balance_mismatch: false,
+            fee_threshold_cents: 1,
         };
 
         let provider = MultiRateProvider;

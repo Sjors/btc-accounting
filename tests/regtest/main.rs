@@ -204,6 +204,7 @@ fn run_salary_scenario() -> Result<()> {
         bank_name: Some("Bitcoin Core - accounting".to_owned()),
         wallet_balance_sats: None,
         ignore_balance_mismatch: false,
+        fee_threshold_cents: 1,
     };
 
     let mut statement = btc_fiat_value::accounting::build_statement(&transactions, &mock_provider, &config)?;

@@ -38,6 +38,7 @@ options:
   --start-date <date>   Start date YYYY-MM-DD
   --bank-name <name>    Bank/institution name (default: Bitcoin Core - <wallet>)
   --candle <minutes>    Kraken candle interval (default: DEFAULT_CANDLE_MINUTES or 1440)
+  --fee-threshold-cents <n>  Fold fees below this threshold into the parent entry description (default: 1)
   --ignore-balance-mismatch  Warn instead of error on forward/backward balance mismatch";
 
 #[derive(Debug, PartialEq, Eq)]
@@ -55,6 +56,7 @@ pub struct ExportArgs {
     pub candle_override_minutes: Option<u32>,
     pub bank_name: Option<String>,
     pub ignore_balance_mismatch: bool,
+    pub fee_threshold_cents: Option<i64>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -207,6 +209,7 @@ pub fn run(args: ExportArgs) -> Result<()> {
             Some(wallet_balance_sats)
         },
         ignore_balance_mismatch: args.ignore_balance_mismatch,
+        fee_threshold_cents: args.fee_threshold_cents.unwrap_or(1),
     };
 
     let mut statement = build_statement(&transactions, &provider, &config)?;
@@ -423,6 +426,7 @@ where
     let mut candle_minutes: Option<u32> = None;
     let mut bank_name: Option<String> = None;
     let mut ignore_balance_mismatch = false;
+    let mut fee_threshold_cents: Option<i64> = None;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -465,6 +469,10 @@ where
                 bank_name = Some(args.next().ok_or_else(|| anyhow::anyhow!("--bank-name requires a value\n\n{usage}"))?);
             }
             "--ignore-balance-mismatch" => ignore_balance_mismatch = true,
+            "--fee-threshold-cents" => {
+                let val = args.next().ok_or_else(|| anyhow::anyhow!("--fee-threshold-cents requires a value\n\n{usage}"))?;
+                fee_threshold_cents = Some(val.parse::<i64>().with_context(|| format!("invalid --fee-threshold-cents: {val}"))?);
+            }
             "-h" | "--help" | "help" => bail!("{usage}"),
             _ => {
                 // Handle --key=value form
@@ -477,6 +485,9 @@ where
                         "--output" => output = Some(PathBuf::from(value)),
                         "--candle" => candle_minutes = Some(crate::common::parse_candle_interval_minutes(value, "--candle")?),
                         "--bank-name" => bank_name = Some(value.to_owned()),
+                        "--fee-threshold-cents" => {
+                            fee_threshold_cents = Some(value.parse::<i64>().with_context(|| format!("invalid --fee-threshold-cents: {value}"))?);
+                        }
                         "--start-date" => {
                             start_date = Some(NaiveDate::parse_from_str(value, "%Y-%m-%d")
                                 .with_context(|| format!("invalid date: {value}"))?);
@@ -538,6 +549,7 @@ where
         candle_override_minutes: candle_minutes,
         bank_name,
         ignore_balance_mismatch,
+        fee_threshold_cents,
     })
 }
 
@@ -587,6 +599,7 @@ mod tests {
                 candle_override_minutes: None,
                 bank_name: None,
                 ignore_balance_mismatch: false,
+                fee_threshold_cents: None,
             }
         );
     }
