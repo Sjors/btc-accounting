@@ -5,7 +5,7 @@ use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use chrono::{Duration, NaiveDate};
+use chrono::NaiveDate;
 
 use crate::accounting::{AccountingConfig, build_statement};
 use crate::common::{AppConfig, default_bitcoin_datadir};
@@ -362,6 +362,8 @@ fn existing_export_plan_from_existing_export(
 ) -> Result<ExistingExportPlan> {
     let existing_opening_date = parse_existing_opening_date(parsed.opening_date.as_deref())?;
     let last_booking_date = parse_last_booking_date(parsed.last_booking_date.as_deref())?;
+    // Recheck the last exported day in append mode: existing refs are deduped,
+    // and a later same-day transaction may have confirmed after the prior export.
 
     if let Some(requested_start_date) = requested_start_date {
         if requested_start_date > existing_opening_date {
@@ -386,7 +388,7 @@ fn existing_export_plan_from_existing_export(
         return Ok(ExistingExportPlan {
             merge_mode: ExistingMergeMode::Append,
             build_opening_balance_cents: parsed.closing_balance_cents,
-            build_start_date: last_booking_date.map(|date| date + Duration::days(1)),
+            build_start_date: last_booking_date,
             build_end_exclusive: None,
             existing_opening_balance_cents: parsed.opening_balance_cents,
             existing_opening_date: existing_opening_date.to_string(),
@@ -398,7 +400,7 @@ fn existing_export_plan_from_existing_export(
     Ok(ExistingExportPlan {
         merge_mode: ExistingMergeMode::Append,
         build_opening_balance_cents: parsed.closing_balance_cents,
-        build_start_date: last_booking_date.map(|date| date + Duration::days(1)),
+        build_start_date: last_booking_date,
         build_end_exclusive: None,
         existing_opening_balance_cents: parsed.opening_balance_cents,
         existing_opening_date: existing_opening_date.to_string(),
@@ -713,7 +715,7 @@ mod tests {
     }
 
     #[test]
-    fn append_plan_uses_day_after_last_booking_when_no_start_date_is_provided() {
+    fn append_plan_rechecks_last_booking_date_when_no_start_date_is_provided() {
         let parsed = Camt053ParseResult {
             opening_balance_cents: 100,
             opening_date: Some("2025-01-01".to_owned()),
@@ -739,7 +741,7 @@ mod tests {
         assert_eq!(plan.build_opening_balance_cents, 123);
         assert_eq!(
             plan.build_start_date,
-            Some(NaiveDate::from_ymd_opt(2025, 1, 2).expect("date"))
+            Some(NaiveDate::from_ymd_opt(2025, 1, 1).expect("date"))
         );
         assert_eq!(plan.existing_entries.len(), 1);
         assert!(plan.existing_entry_refs.contains("100:abcd:0"));
