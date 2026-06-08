@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use anyhow::{Result, Context, bail};
+use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Datelike, NaiveDate, Utc};
 
 use crate::exchange_rate::ExchangeRateProvider;
@@ -61,7 +61,8 @@ pub fn build_statement(
     // When getbalance is available, compute the opening balance backwards from it.
     // This is more reliable than forward replay of pre-start transactions, which can
     // be thrown off by RBF transactions, self-sends, and other wallet quirks.
-    let backwards_opening_sats: Option<i64> = if let Some(wallet_sats) = config.wallet_balance_sats {
+    let backwards_opening_sats: Option<i64> = if let Some(wallet_sats) = config.wallet_balance_sats
+    {
         let mut backwards_sats = wallet_sats;
         let mut back_fee_txids = std::collections::HashSet::new();
         for tx in transactions.iter().rev() {
@@ -111,10 +112,12 @@ pub fn build_statement(
             if config.fiat_mode && opening_sats != 0 {
                 if let Some(start) = config.start_date {
                     let start_ts = start.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp();
-                    let rate = provider.get_vwap(start_ts, config.candle_interval_minutes)
+                    let rate = provider
+                        .get_vwap(start_ts, config.candle_interval_minutes)
                         .context("failed to get rate at start_date for opening balance")?;
                     opening_rate = Some(rate);
-                    balance_cents = config.opening_balance_cents + convert_to_cents(opening_sats, Some(rate));
+                    balance_cents =
+                        config.opening_balance_cents + convert_to_cents(opening_sats, Some(rate));
                 }
             }
             computed_opening_balance = Some(balance_cents);
@@ -156,8 +159,13 @@ pub fn build_statement(
 
         let booking_date = timestamp_to_date_string(tx.block_time)?;
         let rate_cents_per_btc = if config.fiat_mode {
-            Some(provider.get_vwap(tx.block_time, config.candle_interval_minutes)
-                .with_context(|| format!("failed to get rate for tx {} at {}", tx.txid, tx.block_time))?)
+            Some(
+                provider
+                    .get_vwap(tx.block_time, config.candle_interval_minutes)
+                    .with_context(|| {
+                        format!("failed to get rate for tx {} at {}", tx.txid, tx.block_time)
+                    })?,
+            )
         } else {
             None
         };
@@ -178,9 +186,24 @@ pub fn build_statement(
                 let entry_ref = format_entry_ref(tx.block_height, &tx.txid, tx.vout);
                 let full_ref = format_full_ref(&tx.block_hash, &tx.txid, tx.vout);
 
-                let label = if tx.address.is_empty() { "" } else if tx.label.is_empty() { &tx.address } else { &tx.label };
-                let hash_suffix = tx.payment_hash.as_deref().map(|h| format!("payment hash: {h}"));
-                let description = format_description(label, "Received", tx.amount_sats, rate_cents_per_btc, hash_suffix.as_deref());
+                let label = if tx.address.is_empty() {
+                    ""
+                } else if tx.label.is_empty() {
+                    &tx.address
+                } else {
+                    &tx.label
+                };
+                let hash_suffix = tx
+                    .payment_hash
+                    .as_deref()
+                    .map(|h| format!("payment hash: {h}"));
+                let description = format_description(
+                    label,
+                    "Received",
+                    tx.amount_sats,
+                    rate_cents_per_btc,
+                    hash_suffix.as_deref(),
+                );
 
                 entries.push(Entry {
                     entry_ref,
@@ -215,37 +238,54 @@ pub fn build_statement(
                         is_fee: true,
                     });
                 } else {
-
-                let label = if tx.address.is_empty() { "" } else if tx.label.is_empty() { &tx.address } else { &tx.label };
-                let verb = "Sent";
-                // For sub-cent fees, fold the fee mention into the description so
-                // the description reads "... BTC @ rate + N sat fee payment hash: ..." with no
-                // separate fee entry in the XML output.
-                let fee_note_str = tx.fee_sats
-                    .filter(|&f| {
-                        let abs_fee = f.unsigned_abs() as i64;
-                        abs_fee > 0 && convert_to_cents(abs_fee, rate_cents_per_btc) < config.fee_threshold_cents
-                    })
-                    .map(|f| {
-                        let abs_fee = f.unsigned_abs() as i64;
-                        match tx.payment_hash.as_deref() {
-                            Some(h) => format!("+ {abs_fee} sat fee payment hash: {h}"),
-                            None => format!("+ {abs_fee} sat fee"),
-                        }
+                    let label = if tx.address.is_empty() {
+                        ""
+                    } else if tx.label.is_empty() {
+                        &tx.address
+                    } else {
+                        &tx.label
+                    };
+                    let verb = "Sent";
+                    // For sub-cent fees, fold the fee mention into the description so
+                    // the description reads "... BTC @ rate + N sat fee payment hash: ..." with no
+                    // separate fee entry in the XML output.
+                    let fee_note_str = tx
+                        .fee_sats
+                        .filter(|&f| {
+                            let abs_fee = f.unsigned_abs() as i64;
+                            abs_fee > 0
+                                && convert_to_cents(abs_fee, rate_cents_per_btc)
+                                    < config.fee_threshold_cents
+                        })
+                        .map(|f| {
+                            let abs_fee = f.unsigned_abs() as i64;
+                            match tx.payment_hash.as_deref() {
+                                Some(h) => format!("+ {abs_fee} sat fee payment hash: {h}"),
+                                None => format!("+ {abs_fee} sat fee"),
+                            }
+                        });
+                    let effective_suffix = fee_note_str.or_else(|| {
+                        tx.payment_hash
+                            .as_deref()
+                            .map(|h| format!("payment hash: {h}"))
                     });
-                let effective_suffix = fee_note_str.or_else(|| tx.payment_hash.as_deref().map(|h| format!("payment hash: {h}")));
-                let description = format_description(label, verb, abs_sats, rate_cents_per_btc, effective_suffix.as_deref());
+                    let description = format_description(
+                        label,
+                        verb,
+                        abs_sats,
+                        rate_cents_per_btc,
+                        effective_suffix.as_deref(),
+                    );
 
-                entries.push(Entry {
-                    entry_ref,
-                    full_ref,
-                    booking_date: booking_date.clone(),
-                    amount_cents,
-                    is_credit: false,
-                    description,
-                    is_fee: false,
-                });
-
+                    entries.push(Entry {
+                        entry_ref,
+                        full_ref,
+                        booking_date: booking_date.clone(),
+                        amount_cents,
+                        is_credit: false,
+                        description,
+                        is_fee: false,
+                    });
                 } // else (not LiquidityPurchase)
 
                 // FIFO: consume lots and emit realized gain/loss
@@ -253,15 +293,15 @@ pub fn build_statement(
                     let mut remaining = abs_sats;
                     let mut total_cost = 0i64;
                     while remaining > 0 {
-                        let lot = lots.front_mut()
+                        let lot = lots
+                            .front_mut()
                             .context("FIFO: no lots available to cover send")?;
                         let consume = remaining.min(lot.remaining_sats);
                         // Proportional cost basis for the consumed portion
                         let lot_cost = if consume == lot.remaining_sats {
                             lot.cost_cents
                         } else {
-                            (lot.cost_cents as f64 * consume as f64
-                                / lot.remaining_sats as f64)
+                            (lot.cost_cents as f64 * consume as f64 / lot.remaining_sats as f64)
                                 .round() as i64
                         };
                         total_cost += lot_cost;
@@ -280,18 +320,24 @@ pub fn build_statement(
                         } else {
                             (false, -gain)
                         };
-                        let gain_ref = format!(":fifo:{}:{}:{}", tx.block_height,
-                            &tx.txid[..20.min(tx.txid.len())], tx.vout);
+                        let gain_ref = format!(
+                            ":fifo:{}:{}:{}",
+                            tx.block_height,
+                            &tx.txid[..20.min(tx.txid.len())],
+                            tx.vout
+                        );
                         entries.push(Entry {
                             entry_ref: gain_ref.clone(),
                             full_ref: gain_ref,
                             booking_date: booking_date.clone(),
                             amount_cents: gain_cents,
                             is_credit,
-                            description: format!("FIFO realized {} {}{:.2}",
+                            description: format!(
+                                "FIFO realized {} {}{:.2}",
                                 if is_credit { "gain" } else { "loss" },
                                 &config.currency,
-                                gain_cents as f64 / 100.0),
+                                gain_cents as f64 / 100.0
+                            ),
                             is_fee: false,
                         });
                         // Adjust balance_cents: the send was booked at spot, but
@@ -321,14 +367,14 @@ pub fn build_statement(
                     let mut remaining = abs_fee;
                     let mut total_cost = 0i64;
                     while remaining > 0 {
-                        let lot = lots.front_mut()
+                        let lot = lots
+                            .front_mut()
                             .context("FIFO: no lots available to cover fee")?;
                         let consume = remaining.min(lot.remaining_sats);
                         let lot_cost = if consume == lot.remaining_sats {
                             lot.cost_cents
                         } else {
-                            (lot.cost_cents as f64 * consume as f64
-                                / lot.remaining_sats as f64)
+                            (lot.cost_cents as f64 * consume as f64 / lot.remaining_sats as f64)
                                 .round() as i64
                         };
                         total_cost += lot_cost;
@@ -348,7 +394,11 @@ pub fn build_statement(
 
                 if fee_cents >= config.fee_threshold_cents {
                     entries.push(Entry {
-                        entry_ref: format!(":{}:{}:fee", tx.block_height, &tx.txid[..20.min(tx.txid.len())]),
+                        entry_ref: format!(
+                            ":{}:{}:fee",
+                            tx.block_height,
+                            &tx.txid[..20.min(tx.txid.len())]
+                        ),
                         full_ref: format!(":{}:{}:fee", tx.block_hash, tx.txid),
                         booking_date,
                         amount_cents: fee_cents,
@@ -368,7 +418,9 @@ pub fn build_statement(
     if config.mark_to_market && config.fiat_mode {
         let last_entry_year = entries
             .last()
-            .and_then(|e| NaiveDate::parse_from_str(booking_date_to_date(&e.booking_date), "%Y-%m-%d").ok())
+            .and_then(|e| {
+                NaiveDate::parse_from_str(booking_date_to_date(&e.booking_date), "%Y-%m-%d").ok()
+            })
             .map(|d| d.year());
 
         if let Some(year) = last_entry_year {
@@ -401,7 +453,9 @@ pub fn build_statement(
                  post-start transactions gives {} sats, \
                  but getbalance reports {} sats \
                  (difference: {} sats, post-start fees: {} sats)",
-                opening_sats, balance_sats, wallet_sats,
+                opening_sats,
+                balance_sats,
+                wallet_sats,
                 balance_sats - wallet_sats,
                 total_post_start_fees,
             );
@@ -412,9 +466,14 @@ pub fn build_statement(
         }
     }
 
-    let opening_date = config.start_date
+    let opening_date = config
+        .start_date
         .map(|d| d.format("%Y-%m-%d").to_string())
-        .or_else(|| entries.first().map(|e| booking_date_to_date(&e.booking_date).to_owned()))
+        .or_else(|| {
+            entries
+                .first()
+                .map(|e| booking_date_to_date(&e.booking_date).to_owned())
+        })
         .unwrap_or_else(|| "1970-01-01".to_owned());
 
     let statement_date = entries
@@ -468,7 +527,8 @@ fn mark_to_market_entry(
     // CET is UTC+1
     let year_end_utc = year_end_midnight_cet.and_utc().timestamp() - 3600;
 
-    let rate = provider.get_vwap(year_end_utc, interval_minutes)
+    let rate = provider
+        .get_vwap(year_end_utc, interval_minutes)
         .with_context(|| format!("failed to get year-end rate for {year}"))?;
 
     let target_cents = sats_to_cents(balance_sats, rate);
@@ -517,9 +577,19 @@ fn format_full_ref(block_hash: &str, txid: &str, vout: u32) -> String {
     format!("{block_hash}:{txid}:{vout}")
 }
 
-fn format_description(label: &str, verb: &str, sats: i64, rate_cents_per_btc: Option<f64>, suffix: Option<&str>) -> String {
+fn format_description(
+    label: &str,
+    verb: &str,
+    sats: i64,
+    rate_cents_per_btc: Option<f64>,
+    suffix: Option<&str>,
+) -> String {
     let btc = sats as f64 / 100_000_000.0;
-    let prefix = if label.is_empty() { String::new() } else { format!("{label} - ") };
+    let prefix = if label.is_empty() {
+        String::new()
+    } else {
+        format!("{label} - ")
+    };
     let rate_part = match rate_cents_per_btc {
         Some(rate) => format!(" @ {rate:.2}"),
         None => String::new(),
@@ -687,10 +757,7 @@ mod tests {
     #[test]
     fn entry_ref_format() {
         let txid = "aabbccddee11223344556677889900aabbccddee11223344556677889900aabb";
-        assert_eq!(
-            format_entry_ref(100, txid, 0),
-            "100:aabbccddee1122334455:0"
-        );
+        assert_eq!(format_entry_ref(100, txid, 0), "100:aabbccddee1122334455:0");
     }
 
     /// When all BTC is sold before year-end, balance_sats is 0 but balance_cents
@@ -744,8 +811,14 @@ mod tests {
         // balance_cents = 450_000 - 475_000 = -25_000
         // MTM target = 0 sats at 95k = 0 cents
         // adjustment = 0 - (-25_000) = 25_000 (credit)
-        let mtm = stmt.entries.iter().find(|e| e.entry_ref.starts_with(":mtm:"));
-        assert!(mtm.is_some(), "MTM entry should be generated even with zero BTC balance");
+        let mtm = stmt
+            .entries
+            .iter()
+            .find(|e| e.entry_ref.starts_with(":mtm:"));
+        assert!(
+            mtm.is_some(),
+            "MTM entry should be generated even with zero BTC balance"
+        );
         let mtm = mtm.unwrap();
         assert_eq!(mtm.amount_cents, 25_000);
         assert!(mtm.is_credit);
@@ -766,14 +839,11 @@ mod tests {
             }
         }
 
-        let txs = vec![
-            make_receive(5_000_000, 1_736_899_200, 100),
-            {
-                let mut tx = make_send(5_000_000, 0, 1_742_025_600, 101);
-                tx.txid = "ee".repeat(32);
-                tx
-            },
-        ];
+        let txs = vec![make_receive(5_000_000, 1_736_899_200, 100), {
+            let mut tx = make_send(5_000_000, 0, 1_742_025_600, 101);
+            tx.txid = "ee".repeat(32);
+            tx
+        }];
 
         let config = AccountingConfig {
             fiat_mode: true,
@@ -796,7 +866,10 @@ mod tests {
         // Receive: 5_000_000 * 90_000 * 100 / 100_000_000 = 450_000 cents
         // Send:    5_000_000 * 95_000 * 100 / 100_000_000 = 475_000 cents
         // FIFO gain: 475_000 - 450_000 = 25_000 cents (credit)
-        let fifo = stmt.entries.iter().find(|e| e.entry_ref.starts_with(":fifo:"));
+        let fifo = stmt
+            .entries
+            .iter()
+            .find(|e| e.entry_ref.starts_with(":fifo:"));
         assert!(fifo.is_some(), "FIFO entry should be generated");
         let fifo = fifo.unwrap();
         assert_eq!(fifo.amount_cents, 25_000);
@@ -806,8 +879,14 @@ mod tests {
         // With FIFO, balance_cents should be 0 after selling all at a gain,
         // because the gain entry corrected balance_cents.
         // MTM should then be 0 (no adjustment needed).
-        let mtm = stmt.entries.iter().find(|e| e.entry_ref.starts_with(":mtm:"));
-        assert!(mtm.is_none(), "MTM should not fire when FIFO already zeroed the balance");
+        let mtm = stmt
+            .entries
+            .iter()
+            .find(|e| e.entry_ref.starts_with(":mtm:"));
+        assert!(
+            mtm.is_none(),
+            "MTM should not fire when FIFO already zeroed the balance"
+        );
         assert_eq!(stmt.closing_balance_cents, 0);
     }
 
@@ -825,14 +904,11 @@ mod tests {
             }
         }
 
-        let txs = vec![
-            make_receive(10_000_000, 1_736_899_200, 100),
-            {
-                let mut tx = make_send(4_000_000, 0, 1_742_025_600, 101);
-                tx.txid = "ee".repeat(32);
-                tx
-            },
-        ];
+        let txs = vec![make_receive(10_000_000, 1_736_899_200, 100), {
+            let mut tx = make_send(4_000_000, 0, 1_742_025_600, 101);
+            tx.txid = "ee".repeat(32);
+            tx
+        }];
 
         let config = AccountingConfig {
             fiat_mode: true,
@@ -856,7 +932,11 @@ mod tests {
         // Send:    4_000_000 * 95_000 / 1e8 * 100 = 380_000 cents (spot)
         // Cost basis of 4M sats from lot: 900_000 * 4/10 = 360_000
         // FIFO gain: 380_000 - 360_000 = 20_000
-        let fifo = stmt.entries.iter().find(|e| e.entry_ref.starts_with(":fifo:")).unwrap();
+        let fifo = stmt
+            .entries
+            .iter()
+            .find(|e| e.entry_ref.starts_with(":fifo:"))
+            .unwrap();
         assert_eq!(fifo.amount_cents, 20_000);
         assert!(fifo.is_credit);
 
@@ -864,7 +944,11 @@ mod tests {
         // balance_cents after send+fifo = 900_000 - 380_000 + 20_000 = 540_000
         // MTM: 6_000_000 * 95_000 / 1e8 * 100 = 570_000 target
         // adjustment = 570_000 - 540_000 = 30_000 (credit)
-        let mtm = stmt.entries.iter().find(|e| e.entry_ref.starts_with(":mtm:")).unwrap();
+        let mtm = stmt
+            .entries
+            .iter()
+            .find(|e| e.entry_ref.starts_with(":mtm:"))
+            .unwrap();
         assert_eq!(mtm.amount_cents, 30_000);
         assert!(mtm.is_credit);
         assert_eq!(stmt.closing_balance_cents, 570_000);
@@ -887,17 +971,20 @@ mod tests {
         }
 
         let txs = vec![
-            { // receive 0.03 BTC at 90k
+            {
+                // receive 0.03 BTC at 90k
                 let mut tx = make_receive(3_000_000, 1_736_500_000, 100);
                 tx.txid = "a1".repeat(32);
                 tx
             },
-            { // receive 0.02 BTC at 100k
+            {
+                // receive 0.02 BTC at 100k
                 let mut tx = make_receive(2_000_000, 1_737_500_000, 101);
                 tx.txid = "a2".repeat(32);
                 tx
             },
-            { // send 0.04 BTC at 95k — consumes all of lot 1 + part of lot 2
+            {
+                // send 0.04 BTC at 95k — consumes all of lot 1 + part of lot 2
                 let mut tx = make_send(4_000_000, 0, 1_742_025_600, 102);
                 tx.txid = "ee".repeat(32);
                 tx
@@ -928,7 +1015,11 @@ mod tests {
         // Consumed: all of lot 1 (270_000) + 1_000_000 from lot 2 (cost = 200_000 * 1/2 = 100_000)
         // Total cost = 270_000 + 100_000 = 370_000
         // FIFO gain = 380_000 - 370_000 = 10_000
-        let fifo = stmt.entries.iter().find(|e| e.entry_ref.starts_with(":fifo:")).unwrap();
+        let fifo = stmt
+            .entries
+            .iter()
+            .find(|e| e.entry_ref.starts_with(":fifo:"))
+            .unwrap();
         assert_eq!(fifo.amount_cents, 10_000);
         assert!(fifo.is_credit);
 
@@ -936,7 +1027,11 @@ mod tests {
         // balance_cents = 270_000 + 200_000 - 380_000 + 10_000 = 100_000
         // MTM target = 1_000_000 * 95_000 / 1e8 * 100 = 95_000
         // adjustment = 95_000 - 100_000 = -5_000 (debit/loss)
-        let mtm = stmt.entries.iter().find(|e| e.entry_ref.starts_with(":mtm:")).unwrap();
+        let mtm = stmt
+            .entries
+            .iter()
+            .find(|e| e.entry_ref.starts_with(":mtm:"))
+            .unwrap();
         assert_eq!(mtm.amount_cents, 5_000);
         assert!(!mtm.is_credit); // loss
         assert_eq!(stmt.closing_balance_cents, 95_000);

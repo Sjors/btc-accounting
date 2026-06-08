@@ -110,6 +110,15 @@ impl RegtestNode {
         self.datadir.path()
     }
 
+    pub fn stop(&mut self) -> Result<()> {
+        if let Some(mut child) = self.process.take() {
+            // Try graceful shutdown via RPC stop.
+            let _ = self.rpc_call::<serde_json::Value>("stop", &[]);
+            child.wait().context("failed to wait for bitcoin node")?;
+        }
+        Ok(())
+    }
+
     /// Path to the IPC Unix socket (created by -ipcbind=unix).
     pub fn ipc_socket_path(&self) -> PathBuf {
         self.datadir.path().join("regtest").join("node.sock")
@@ -162,11 +171,17 @@ impl RegtestNode {
 
         if let Some(err) = raw.get("error").filter(|e| !e.is_null()) {
             let code = err.get("code").and_then(|c| c.as_i64()).unwrap_or(-1);
-            let message = err.get("message").and_then(|m| m.as_str()).unwrap_or("unknown error");
+            let message = err
+                .get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("unknown error");
             bail!("{method}: {message} (code {code})");
         }
 
-        let result_val = raw.get("result").cloned().unwrap_or(serde_json::Value::Null);
+        let result_val = raw
+            .get("result")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
         serde_json::from_value(result_val)
             .with_context(|| format!("failed to decode {method} result"))
     }
@@ -209,5 +224,25 @@ pub fn find_bitcoin() -> Result<PathBuf> {
          cmake -B build -DENABLE_WALLET=ON -DBUILD_TESTS=OFF -DBUILD_BENCH=OFF\n  \
          cmake --build build -j$(nproc) --target bitcoin bitcoin-node",
         bitcoin.display()
+    );
+}
+
+/// Find the `bitcoin-wallet` binary next to the pre-built `bitcoin` wrapper.
+pub fn find_bitcoin_wallet(bitcoin_path: &Path) -> Result<PathBuf> {
+    let bitcoin_wallet = bitcoin_path
+        .parent()
+        .context("bitcoin path has no parent directory")?
+        .join("bitcoin-wallet");
+
+    if bitcoin_wallet.exists() {
+        return Ok(bitcoin_wallet);
+    }
+
+    bail!(
+        "bitcoin-wallet not found at {}.\n\
+         Build it first:\n  \
+         cd bitcoin-core\n  \
+         cmake --build build -j$(nproc) --target bitcoin-wallet",
+        bitcoin_wallet.display()
     );
 }

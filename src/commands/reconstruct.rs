@@ -5,8 +5,8 @@ use anyhow::{Context, Result, bail};
 
 use crate::common::default_bitcoin_datadir;
 use crate::export::camt053::parse_camt053;
-use crate::import::bitcoin_core_rpc::BitcoinCoreRpc;
 use crate::import::TransactionSource;
+use crate::import::bitcoin_core_rpc::BitcoinCoreRpc;
 
 pub const SUBCOMMAND_NAME: &str = "reconstruct";
 
@@ -34,22 +34,23 @@ pub fn run(args: ReconstructArgs) -> Result<()> {
     // Parse the CAMT.053 file
     let xml = std::fs::read_to_string(&args.input)
         .with_context(|| format!("failed to read {}", args.input.display()))?;
-    let parsed = parse_camt053(&xml)
-        .context("failed to parse CAMT.053 file")?;
+    let parsed = parse_camt053(&xml).context("failed to parse CAMT.053 file")?;
 
     if parsed.descriptors.is_empty() {
         bail!("no watch-only descriptors found in XML comments");
     }
 
-    eprintln!("Parsed {} entries, {} descriptor(s) from {}",
+    eprintln!(
+        "Parsed {} entries, {} descriptor(s) from {}",
         parsed.existing_entries.len(),
         parsed.descriptors.len(),
-        args.input.display());
+        args.input.display()
+    );
 
     // Determine wallet name
-    let wallet_name = args.wallet.unwrap_or_else(|| {
-        format!("reconstruct-{}", parsed.account_iban)
-    });
+    let wallet_name = args
+        .wallet
+        .unwrap_or_else(|| format!("reconstruct-{}", parsed.account_iban));
 
     let rpc_url = crate::import::bitcoin_core_rpc::rpc_url_for_chain(&args.chain)?;
     let cookie_path = crate::import::bitcoin_core_rpc::cookie_path(&args.datadir, &args.chain);
@@ -114,7 +115,10 @@ pub fn run(args: ReconstructArgs) -> Result<()> {
         for ref_id in &missing {
             eprintln!("  Missing: {ref_id}");
         }
-        bail!("{} transaction(s) from XML not found in wallet", missing.len());
+        bail!(
+            "{} transaction(s) from XML not found in wallet",
+            missing.len()
+        );
     }
 
     eprintln!("✅ All transactions verified");
@@ -129,18 +133,24 @@ fn create_watch_only_wallet(
     descriptors: &[String],
 ) -> Result<()> {
     let client = reqwest::blocking::Client::builder()
-        .user_agent(concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!(
+            env!("CARGO_PKG_NAME"),
+            "/",
+            env!("CARGO_PKG_VERSION")
+        ))
         .build()
         .context("failed to build HTTP client")?;
 
     // Create blank, watch-only wallet (disable_private_keys=true, blank=true)
     let create_result = rpc_call_raw(
-        &client, rpc_url, cookie,
+        &client,
+        rpc_url,
+        cookie,
         "createwallet",
         &[
             serde_json::json!(wallet_name),
-            serde_json::json!(true),  // disable_private_keys
-            serde_json::json!(true),  // blank
+            serde_json::json!(true), // disable_private_keys
+            serde_json::json!(true), // blank
         ],
     )?;
     if let Some(err) = create_result.get("error").filter(|e| !e.is_null()) {
@@ -199,7 +209,9 @@ fn create_watch_only_wallet(
     eprintln!("Importing {} descriptor(s)...", import_descs.len());
 
     let import_result = rpc_call_raw(
-        &client, &wallet_url, cookie,
+        &client,
+        &wallet_url,
+        cookie,
         "importdescriptors",
         &[serde_json::json!(import_descs)],
     )?;
@@ -224,7 +236,13 @@ fn get_descriptor_checksum(
     cookie: &str,
     desc: &str,
 ) -> Result<String> {
-    let result = rpc_call_raw(client, url, cookie, "getdescriptorinfo", &[serde_json::json!(desc)])?;
+    let result = rpc_call_raw(
+        client,
+        url,
+        cookie,
+        "getdescriptorinfo",
+        &[serde_json::json!(desc)],
+    )?;
     let checksum = result
         .get("result")
         .and_then(|r| r.get("checksum"))
@@ -271,20 +289,26 @@ where
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--input" => {
-                input = Some(PathBuf::from(
-                    args.next().ok_or_else(|| anyhow::anyhow!("--input requires a value\n\n{usage}"))?,
-                ));
+                input = Some(PathBuf::from(args.next().ok_or_else(|| {
+                    anyhow::anyhow!("--input requires a value\n\n{usage}")
+                })?));
             }
             "--wallet" => {
-                wallet = Some(args.next().ok_or_else(|| anyhow::anyhow!("--wallet requires a value\n\n{usage}"))?);
+                wallet = Some(
+                    args.next()
+                        .ok_or_else(|| anyhow::anyhow!("--wallet requires a value\n\n{usage}"))?,
+                );
             }
             "--datadir" => {
-                datadir = Some(PathBuf::from(
-                    args.next().ok_or_else(|| anyhow::anyhow!("--datadir requires a value\n\n{usage}"))?,
-                ));
+                datadir = Some(PathBuf::from(args.next().ok_or_else(|| {
+                    anyhow::anyhow!("--datadir requires a value\n\n{usage}")
+                })?));
             }
             "--chain" => {
-                chain = Some(args.next().ok_or_else(|| anyhow::anyhow!("--chain requires a value\n\n{usage}"))?);
+                chain = Some(
+                    args.next()
+                        .ok_or_else(|| anyhow::anyhow!("--chain requires a value\n\n{usage}"))?,
+                );
             }
             "-h" | "--help" | "help" => bail!("{usage}"),
             _ => {
@@ -303,8 +327,7 @@ where
         }
     }
 
-    let input = input
-        .ok_or_else(|| anyhow::anyhow!("--input is required\n\n{usage}"))?;
+    let input = input.ok_or_else(|| anyhow::anyhow!("--input is required\n\n{usage}"))?;
 
     let chain = chain
         .or_else(|| env::var("BITCOIN_CHAIN").ok())

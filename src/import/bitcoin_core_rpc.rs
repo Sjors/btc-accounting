@@ -18,7 +18,11 @@ pub struct BitcoinCoreRpc {
 impl BitcoinCoreRpc {
     pub fn new(wallet: &str, datadir: &Path, chain: &str) -> Result<Self> {
         let client = Client::builder()
-            .user_agent(concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION")))
+            .user_agent(concat!(
+                env!("CARGO_PKG_NAME"),
+                "/",
+                env!("CARGO_PKG_VERSION")
+            ))
             .build()
             .context("failed to build RPC HTTP client")?;
 
@@ -39,7 +43,11 @@ impl BitcoinCoreRpc {
     /// Create with an explicit RPC URL (for testing).
     pub fn with_url(rpc_url: &str, wallet: &str, datadir: &Path, chain: &str) -> Result<Self> {
         let client = Client::builder()
-            .user_agent(concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION")))
+            .user_agent(concat!(
+                env!("CARGO_PKG_NAME"),
+                "/",
+                env!("CARGO_PKG_VERSION")
+            ))
             .build()
             .context("failed to build RPC HTTP client")?;
 
@@ -70,7 +78,10 @@ impl BitcoinCoreRpc {
 
     /// Get watch-only (public) descriptors for addresses that received coins.
     /// Returns multipath descriptors (BIP-389) combining receive and change paths.
-    pub fn get_receive_descriptors(&self, receive_addresses: &std::collections::HashSet<String>) -> Result<Vec<String>> {
+    pub fn get_receive_descriptors(
+        &self,
+        receive_addresses: &std::collections::HashSet<String>,
+    ) -> Result<Vec<String>> {
         let descriptors = self.list_descriptors()?;
 
         let mut result = Vec::new();
@@ -83,10 +94,7 @@ impl BitcoinCoreRpc {
             let range = desc_info.range.unwrap_or([0, 0]);
             let derived: Vec<String> = self.rpc_call(
                 "deriveaddresses",
-                &[
-                    serde_json::json!(desc_info.desc),
-                    serde_json::json!(range),
-                ],
+                &[serde_json::json!(desc_info.desc), serde_json::json!(range)],
             )?;
 
             if derived.iter().any(|a| receive_addresses.contains(a)) {
@@ -101,7 +109,11 @@ impl BitcoinCoreRpc {
 
     /// Combine a receive descriptor (`.../0/*`) with its matching change descriptor (`.../1/*`)
     /// into a single BIP-389 multipath descriptor (`.../&lt;0;1&gt;/*`).
-    fn build_multipath_descriptor(&self, receive_desc: &str, all_descriptors: &[DescriptorInfo]) -> Option<String> {
+    fn build_multipath_descriptor(
+        &self,
+        receive_desc: &str,
+        all_descriptors: &[DescriptorInfo],
+    ) -> Option<String> {
         // Strip checksum from receive descriptor
         let recv_bare = receive_desc.split('#').next()?;
 
@@ -115,9 +127,9 @@ impl BitcoinCoreRpc {
         let expected_change = format!("{prefix}/1/*)");
 
         // Find matching internal descriptor
-        let found = all_descriptors.iter().any(|d| {
-            d.internal && d.desc.split('#').next() == Some(&expected_change)
-        });
+        let found = all_descriptors
+            .iter()
+            .any(|d| d.internal && d.desc.split('#').next() == Some(&expected_change));
 
         if found {
             Some(format!("{prefix}/<0;1>/*)"))
@@ -139,11 +151,16 @@ impl BitcoinCoreRpc {
     /// List currently loaded wallets (non-wallet-specific RPC call).
     pub fn list_wallets(rpc_url: &str, cookie: &str) -> Result<Vec<String>> {
         let client = Client::builder()
-            .user_agent(concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION")))
+            .user_agent(concat!(
+                env!("CARGO_PKG_NAME"),
+                "/",
+                env!("CARGO_PKG_VERSION")
+            ))
             .build()
             .context("failed to build RPC HTTP client")?;
 
-        let response: RpcResponse<Vec<String>> = rpc_request(&client, rpc_url, cookie, "listwallets", &[])?;
+        let response: RpcResponse<Vec<String>> =
+            rpc_request(&client, rpc_url, cookie, "listwallets", &[])?;
 
         response.result.ok_or_else(|| match response.error {
             Some(err) => anyhow!("listwallets failed: {} (code {})", err.message, err.code),
@@ -154,10 +171,13 @@ impl BitcoinCoreRpc {
     /// Get the wallet's confirmed balance in satoshis.
     pub fn get_balance(&self) -> Result<i64> {
         // minconf=1 to exclude unconfirmed transactions (matching listtransactions filtering)
-        let btc: f64 = self.rpc_call("getbalance", &[
-            serde_json::json!("*"),   // dummy (deprecated first arg)
-            serde_json::json!(1),     // minconf
-        ])?;
+        let btc: f64 = self.rpc_call(
+            "getbalance",
+            &[
+                serde_json::json!("*"), // dummy (deprecated first arg)
+                serde_json::json!(1),   // minconf
+            ],
+        )?;
         Ok(btc_to_sats(btc))
     }
 
@@ -167,7 +187,8 @@ impl BitcoinCoreRpc {
         params: &[serde_json::Value],
     ) -> Result<T> {
         let url = format!("{}/wallet/{}", self.rpc_url, self.wallet);
-        let response: RpcResponse<T> = rpc_request(&self.client, &url, &self.cookie, method, params)?;
+        let response: RpcResponse<T> =
+            rpc_request(&self.client, &url, &self.cookie, method, params)?;
 
         response.result.ok_or_else(|| match response.error {
             Some(err) => anyhow!("{method} failed: {} (code {})", err.message, err.code),
@@ -256,7 +277,10 @@ impl TransactionSource for BitcoinCoreRpc {
             for tx in &raw_txs {
                 if tx.confirmations < 1 {
                     if tx.walletconflicts.is_empty() && tx.replaces_txid.is_none() {
-                        eprintln!("⚠️  Skipping unconfirmed transaction {} (no block hash yet)", tx.txid);
+                        eprintln!(
+                            "⚠️  Skipping unconfirmed transaction {} (no block hash yet)",
+                            tx.txid
+                        );
                     }
                     continue;
                 }
@@ -360,10 +384,7 @@ mod tests {
             parse_fingerprint_from_descriptor("tr([AABBCCDD/86'/0'/0']xpub6...)"),
             Some("aabbccdd".to_owned())
         );
-        assert_eq!(
-            parse_fingerprint_from_descriptor("wpkh(xpub6...)"),
-            None
-        );
+        assert_eq!(parse_fingerprint_from_descriptor("wpkh(xpub6...)"), None);
     }
 
     #[test]

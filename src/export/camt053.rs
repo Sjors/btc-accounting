@@ -24,8 +24,16 @@ fn write_xml(stmt: &Statement, out: &mut dyn Write) -> Result<()> {
 
     // Group Header (mandatory in CAMT.053)
     writeln!(out, "    <GrpHdr>")?;
-    writeln!(out, "      <MsgId>{}</MsgId>", xml_escape(&stmt.statement_id))?;
-    writeln!(out, "      <CreDtTm>{}T00:00:00</CreDtTm>", stmt.statement_date)?;
+    writeln!(
+        out,
+        "      <MsgId>{}</MsgId>",
+        xml_escape(&stmt.statement_id)
+    )?;
+    writeln!(
+        out,
+        "      <CreDtTm>{}T00:00:00</CreDtTm>",
+        stmt.statement_date
+    )?;
     writeln!(out, "      <MsgPgntn>")?;
     writeln!(out, "        <PgNb>1</PgNb>")?;
     writeln!(out, "        <LastPgInd>true</LastPgInd>")?;
@@ -35,7 +43,11 @@ fn write_xml(stmt: &Statement, out: &mut dyn Write) -> Result<()> {
     writeln!(out, "    <Stmt>")?;
     writeln!(out, "      <Id>{}</Id>", xml_escape(&stmt.statement_id))?;
     writeln!(out, "      <ElctrncSeqNb>1</ElctrncSeqNb>")?;
-    writeln!(out, "      <CreDtTm>{}T00:00:00</CreDtTm>", stmt.statement_date)?;
+    writeln!(
+        out,
+        "      <CreDtTm>{}T00:00:00</CreDtTm>",
+        stmt.statement_date
+    )?;
 
     // Account
     let bic = bic_from_iban(&stmt.account_iban);
@@ -55,10 +67,22 @@ fn write_xml(stmt: &Statement, out: &mut dyn Write) -> Result<()> {
     writeln!(out, "      </Acct>")?;
 
     // Opening balance (fiat)
-    write_balance(out, "OPBD", stmt.opening_balance_cents, &stmt.currency, &opening_date(stmt))?;
+    write_balance(
+        out,
+        "OPBD",
+        stmt.opening_balance_cents,
+        &stmt.currency,
+        &opening_date(stmt),
+    )?;
 
     // Closing balance
-    write_balance(out, "CLBD", stmt.closing_balance_cents, &stmt.currency, &stmt.statement_date)?;
+    write_balance(
+        out,
+        "CLBD",
+        stmt.closing_balance_cents,
+        &stmt.currency,
+        &stmt.statement_date,
+    )?;
 
     // Entries
     for entry in &stmt.entries {
@@ -67,7 +91,10 @@ fn write_xml(stmt: &Statement, out: &mut dyn Write) -> Result<()> {
 
     // Watch-only descriptors as XML comments (for wallet reconstruction)
     if !stmt.descriptors.is_empty() {
-        writeln!(out, "    <!-- Watch-only descriptors (privacy-sensitive — see README) -->")?;
+        writeln!(
+            out,
+            "    <!-- Watch-only descriptors (privacy-sensitive — see README) -->"
+        )?;
         for desc in &stmt.descriptors {
             writeln!(out, "    <!-- {} -->", xml_escape_comment(desc))?;
         }
@@ -78,11 +105,21 @@ fn write_xml(stmt: &Statement, out: &mut dyn Write) -> Result<()> {
         let abs_sats = stmt.opening_balance_sats.unsigned_abs();
         let whole = abs_sats / 100_000_000;
         let frac = abs_sats % 100_000_000;
-        let sign = if stmt.opening_balance_sats < 0 { "-" } else { "" };
-        if let Some(rate) = stmt.opening_rate {
-            writeln!(out, "    <!-- BTC opening balance: {sign}{whole}.{frac:08} BTC @ {rate:.2} -->")?;
+        let sign = if stmt.opening_balance_sats < 0 {
+            "-"
         } else {
-            writeln!(out, "    <!-- BTC opening balance: {sign}{whole}.{frac:08} BTC -->")?;
+            ""
+        };
+        if let Some(rate) = stmt.opening_rate {
+            writeln!(
+                out,
+                "    <!-- BTC opening balance: {sign}{whole}.{frac:08} BTC @ {rate:.2} -->"
+            )?;
+        } else {
+            writeln!(
+                out,
+                "    <!-- BTC opening balance: {sign}{whole}.{frac:08} BTC -->"
+            )?;
         }
     }
 
@@ -97,7 +134,13 @@ fn opening_date(stmt: &Statement) -> String {
     stmt.opening_date.clone()
 }
 
-fn write_balance(out: &mut dyn Write, code: &str, amount_cents: i64, currency: &str, date: &str) -> Result<()> {
+fn write_balance(
+    out: &mut dyn Write,
+    code: &str,
+    amount_cents: i64,
+    currency: &str,
+    date: &str,
+) -> Result<()> {
     let (cd_indicator, abs_cents) = if amount_cents >= 0 {
         ("CRDT", amount_cents)
     } else {
@@ -112,7 +155,10 @@ fn write_balance(out: &mut dyn Write, code: &str, amount_cents: i64, currency: &
     writeln!(out, "            <Cd>{code}</Cd>")?;
     writeln!(out, "          </CdOrPrtry>")?;
     writeln!(out, "        </Tp>")?;
-    writeln!(out, "        <Amt Ccy=\"{currency}\">{whole}.{frac:02}</Amt>")?;
+    writeln!(
+        out,
+        "        <Amt Ccy=\"{currency}\">{whole}.{frac:02}</Amt>"
+    )?;
     writeln!(out, "        <CdtDbtInd>{cd_indicator}</CdtDbtInd>")?;
     writeln!(out, "        <Dt>")?;
     writeln!(out, "          <Dt>{date}</Dt>")?;
@@ -127,8 +173,15 @@ fn write_entry(out: &mut dyn Write, entry: &Entry, currency: &str) -> Result<()>
     let (whole, frac) = cents_to_parts(entry.amount_cents);
 
     writeln!(out, "      <Ntry>")?;
-    writeln!(out, "        <NtryRef>{}</NtryRef>", xml_escape(&entry.entry_ref))?;
-    writeln!(out, "        <Amt Ccy=\"{currency}\">{whole}.{frac:02}</Amt>")?;
+    writeln!(
+        out,
+        "        <NtryRef>{}</NtryRef>",
+        xml_escape(&entry.entry_ref)
+    )?;
+    writeln!(
+        out,
+        "        <Amt Ccy=\"{currency}\">{whole}.{frac:02}</Amt>"
+    )?;
     writeln!(out, "        <CdtDbtInd>{cd_indicator}</CdtDbtInd>")?;
     writeln!(out, "        <Sts>BOOK</Sts>")?;
     writeln!(out, "        <BookgDt>")?;
@@ -235,8 +288,8 @@ pub struct Camt053ParseResult {
 
 /// Parse an existing CAMT.053 XML file to extract data for append mode.
 pub fn parse_camt053(xml: &str) -> Result<Camt053ParseResult> {
-    use quick_xml::events::Event;
     use quick_xml::Reader;
+    use quick_xml::events::Event;
 
     let mut reader = Reader::from_str(xml);
 
@@ -379,7 +432,9 @@ pub fn parse_camt053(xml: &str) -> Result<Camt053ParseResult> {
                             bal_amount_cents = parse_amount_cents(&text)?;
                         }
                         "CdtDbtInd" => bal_is_credit = text == "CRDT",
-                        "Dt" | "DtTm" if path_contains(&path, "Bal") && path_contains(&path, "Dt") => {
+                        "Dt" | "DtTm"
+                            if path_contains(&path, "Bal") && path_contains(&path, "Dt") =>
+                        {
                             let trimmed = text.trim();
                             if bal_date.is_empty() && !trimmed.is_empty() {
                                 bal_date = trimmed.to_owned();
@@ -444,7 +499,12 @@ fn parse_amount_cents(s: &str) -> Result<i64> {
     let frac: i64 = if parts.len() > 1 {
         let frac_str = parts[1];
         match frac_str.len() {
-            1 => frac_str.parse::<i64>().context("invalid amount fractional part")? * 10,
+            1 => {
+                frac_str
+                    .parse::<i64>()
+                    .context("invalid amount fractional part")?
+                    * 10
+            }
             2 => frac_str.parse().context("invalid amount fractional part")?,
             _ => bail!("unexpected decimal places in amount: {s}"),
         }
@@ -535,8 +595,8 @@ mod tests {
         assert!(xml.contains("bc1qtest - Received 0.05263158 BTC @ 95000.00"));
         // Bank transaction codes
         assert!(xml.contains("<Cd>PMNT</Cd>"));
-        assert!(xml.contains("<Cd>RCDT</Cd>"));  // credit entry
-        assert!(xml.contains("<Cd>ICDT</Cd>"));  // debit entry (fee)
+        assert!(xml.contains("<Cd>RCDT</Cd>")); // credit entry
+        assert!(xml.contains("<Cd>ICDT</Cd>")); // debit entry (fee)
         assert!(xml.contains("<SubFmlyCd>OTHR</SubFmlyCd>"));
     }
 
@@ -550,7 +610,10 @@ mod tests {
 
     #[test]
     fn escapes_xml_special_chars() {
-        assert_eq!(xml_escape("a<b>c&d\"e'f"), "a&lt;b&gt;c&amp;d&quot;e&apos;f");
+        assert_eq!(
+            xml_escape("a<b>c&d\"e'f"),
+            "a&lt;b&gt;c&amp;d&quot;e&apos;f"
+        );
     }
 
     #[test]
@@ -585,8 +648,16 @@ mod tests {
         assert_eq!(parsed.opening_date, Some("2025-01-02".to_owned()));
         assert_eq!(parsed.closing_balance_cents, 499_985);
         assert_eq!(parsed.existing_entry_refs.len(), 2);
-        assert!(parsed.existing_entry_refs.contains("100:abcdef01234567890abc:0"));
-        assert!(parsed.existing_entry_refs.contains(":100:abcdef01234567890abc:fee"));
+        assert!(
+            parsed
+                .existing_entry_refs
+                .contains("100:abcdef01234567890abc:0")
+        );
+        assert!(
+            parsed
+                .existing_entry_refs
+                .contains(":100:abcdef01234567890abc:fee")
+        );
         assert_eq!(parsed.last_booking_date, Some("2025-01-02".to_owned()));
 
         // Verify entries were fully parsed

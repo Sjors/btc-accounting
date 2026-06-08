@@ -33,45 +33,56 @@ impl<'a> RpcWallet<'a> {
         let receive_desc = format!("wpkh({tprv}/84h/1h/0h/0/*)");
         let change_desc = format!("wpkh({tprv}/84h/1h/0h/1/*)");
 
-        let recv_info: serde_json::Value = node.rpc_call("getdescriptorinfo", &[serde_json::json!(receive_desc)])?;
-        let change_info: serde_json::Value = node.rpc_call("getdescriptorinfo", &[serde_json::json!(change_desc)])?;
+        let recv_info: serde_json::Value =
+            node.rpc_call("getdescriptorinfo", &[serde_json::json!(receive_desc)])?;
+        let change_info: serde_json::Value =
+            node.rpc_call("getdescriptorinfo", &[serde_json::json!(change_desc)])?;
 
-        let recv_checksum = recv_info["checksum"].as_str()
+        let recv_checksum = recv_info["checksum"]
+            .as_str()
             .context("getdescriptorinfo missing checksum for receive")?;
-        let change_checksum = change_info["checksum"].as_str()
+        let change_checksum = change_info["checksum"]
+            .as_str()
             .context("getdescriptorinfo missing checksum for change")?;
 
         let recv_desc_with_checksum = format!("{receive_desc}#{recv_checksum}");
         let change_desc_with_checksum = format!("{change_desc}#{change_checksum}");
 
-        wallet.wallet_call::<serde_json::Value>("importdescriptors", &[serde_json::json!([
-            {
-                "desc": recv_desc_with_checksum,
-                "timestamp": 0,
-                "active": true,
-                "keypool": true,
-                "internal": false,
-            },
-            {
-                "desc": change_desc_with_checksum,
-                "timestamp": 0,
-                "active": true,
-                "keypool": true,
-                "internal": true,
-            },
-        ])])?;
+        wallet.wallet_call::<serde_json::Value>(
+            "importdescriptors",
+            &[serde_json::json!([
+                {
+                    "desc": recv_desc_with_checksum,
+                    "timestamp": 0,
+                    "active": true,
+                    "keypool": true,
+                    "internal": false,
+                },
+                {
+                    "desc": change_desc_with_checksum,
+                    "timestamp": 0,
+                    "active": true,
+                    "keypool": true,
+                    "internal": true,
+                },
+            ])],
+        )?;
 
         Ok(wallet)
     }
 
     /// Create a watch-only wallet from multipath descriptors (for roundtrip testing).
-    pub fn create_watch_only(node: &'a RegtestNode, name: &str, descriptors: &[String]) -> Result<Self> {
+    pub fn create_watch_only(
+        node: &'a RegtestNode,
+        name: &str,
+        descriptors: &[String],
+    ) -> Result<Self> {
         node.rpc_call::<serde_json::Value>(
             "createwallet",
             &[
                 serde_json::json!(name),
-                serde_json::json!(true),  // disable_private_keys
-                serde_json::json!(true),  // blank
+                serde_json::json!(true), // disable_private_keys
+                serde_json::json!(true), // blank
             ],
         )?;
 
@@ -87,12 +98,16 @@ impl<'a> RpcWallet<'a> {
                 let recv = desc.replace("<0;1>", "0");
                 let change = desc.replace("<0;1>", "1");
 
-                let recv_info: serde_json::Value = node.rpc_call("getdescriptorinfo", &[serde_json::json!(recv)])?;
-                let change_info: serde_json::Value = node.rpc_call("getdescriptorinfo", &[serde_json::json!(change)])?;
+                let recv_info: serde_json::Value =
+                    node.rpc_call("getdescriptorinfo", &[serde_json::json!(recv)])?;
+                let change_info: serde_json::Value =
+                    node.rpc_call("getdescriptorinfo", &[serde_json::json!(change)])?;
 
-                let recv_with_checksum = recv_info["descriptor"].as_str()
+                let recv_with_checksum = recv_info["descriptor"]
+                    .as_str()
                     .context("getdescriptorinfo missing descriptor")?;
-                let change_with_checksum = change_info["descriptor"].as_str()
+                let change_with_checksum = change_info["descriptor"]
+                    .as_str()
                     .context("getdescriptorinfo missing descriptor")?;
 
                 import_descs.push(serde_json::json!({
@@ -112,8 +127,10 @@ impl<'a> RpcWallet<'a> {
                     "internal": true,
                 }));
             } else {
-                let info: serde_json::Value = node.rpc_call("getdescriptorinfo", &[serde_json::json!(desc)])?;
-                let desc_with_checksum = info["descriptor"].as_str()
+                let info: serde_json::Value =
+                    node.rpc_call("getdescriptorinfo", &[serde_json::json!(desc)])?;
+                let desc_with_checksum = info["descriptor"]
+                    .as_str()
                     .context("getdescriptorinfo missing descriptor")?;
 
                 import_descs.push(serde_json::json!({
@@ -127,29 +144,33 @@ impl<'a> RpcWallet<'a> {
             }
         }
 
-        wallet.wallet_call::<serde_json::Value>("importdescriptors", &[serde_json::json!(import_descs)])?;
+        wallet.wallet_call::<serde_json::Value>(
+            "importdescriptors",
+            &[serde_json::json!(import_descs)],
+        )?;
 
         Ok(wallet)
     }
 
     pub fn get_new_address(&self) -> Result<String> {
-        self.wallet_call("getnewaddress", &[
-            serde_json::json!(""),       // label
-            serde_json::json!("bech32"), // address_type
-        ])
+        self.wallet_call(
+            "getnewaddress",
+            &[
+                serde_json::json!(""),       // label
+                serde_json::json!("bech32"), // address_type
+            ],
+        )
     }
 
     fn get_change_address(&self) -> Result<String> {
-        self.wallet_call("getrawchangeaddress", &[
-            serde_json::json!("bech32"),
-        ])
+        self.wallet_call("getrawchangeaddress", &[serde_json::json!("bech32")])
     }
 
     pub fn set_label(&self, address: &str, label: &str) -> Result<()> {
-        self.wallet_call::<serde_json::Value>("setlabel", &[
-            serde_json::json!(address),
-            serde_json::json!(label),
-        ])?;
+        self.wallet_call::<serde_json::Value>(
+            "setlabel",
+            &[serde_json::json!(address), serde_json::json!(label)],
+        )?;
         Ok(())
     }
 
@@ -164,7 +185,10 @@ impl<'a> RpcWallet<'a> {
             let ta = a["txid"].as_str().unwrap_or("");
             let tb = b["txid"].as_str().unwrap_or("");
             ta.cmp(tb).then_with(|| {
-                a["vout"].as_u64().unwrap_or(0).cmp(&b["vout"].as_u64().unwrap_or(0))
+                a["vout"]
+                    .as_u64()
+                    .unwrap_or(0)
+                    .cmp(&b["vout"].as_u64().unwrap_or(0))
             })
         });
 
@@ -190,12 +214,15 @@ impl<'a> RpcWallet<'a> {
         let change = total_in - amount_sats - fee;
 
         // Build inputs and outputs in deterministic order: change at position 0
-        let inputs: Vec<serde_json::Value> = selected.iter().map(|u| {
-            serde_json::json!({
-                "txid": u["txid"],
-                "vout": u["vout"],
+        let inputs: Vec<serde_json::Value> = selected
+            .iter()
+            .map(|u| {
+                serde_json::json!({
+                    "txid": u["txid"],
+                    "vout": u["vout"],
+                })
             })
-        }).collect();
+            .collect();
 
         let change_addr = self.get_change_address()?;
         let outputs = if change > 0 {
@@ -208,16 +235,18 @@ impl<'a> RpcWallet<'a> {
         };
 
         // createrawtransaction preserves input ordering
-        let raw_hex: String = self.wallet_call("createrawtransaction", &[
-            serde_json::json!(inputs),
-            outputs,
-        ])?;
+        let raw_hex: String = self.wallet_call(
+            "createrawtransaction",
+            &[serde_json::json!(inputs), outputs],
+        )?;
 
         // Sign (ECDSA with RFC 6979 is deterministic)
-        let signed: serde_json::Value = self.wallet_call("signrawtransactionwithwallet", &[
-            serde_json::json!(raw_hex),
-        ])?;
-        let signed_hex = signed["hex"].as_str()
+        let signed: serde_json::Value = self.wallet_call(
+            "signrawtransactionwithwallet",
+            &[serde_json::json!(raw_hex)],
+        )?;
+        let signed_hex = signed["hex"]
+            .as_str()
             .context("signrawtransactionwithwallet missing hex")?;
         anyhow::ensure!(
             signed["complete"].as_bool() == Some(true),
@@ -225,9 +254,8 @@ impl<'a> RpcWallet<'a> {
         );
 
         // Send
-        let txid: String = self.wallet_call("sendrawtransaction", &[
-            serde_json::json!(signed_hex),
-        ])?;
+        let txid: String =
+            self.wallet_call("sendrawtransaction", &[serde_json::json!(signed_hex)])?;
         Ok(txid)
     }
 
@@ -245,10 +273,8 @@ impl<'a> RpcWallet<'a> {
         rt: &tokio::runtime::Runtime,
     ) -> Result<bool> {
         // Get scriptPubKey for the address
-        let addr_info: serde_json::Value = self.wallet_call(
-            "getaddressinfo",
-            &[serde_json::json!(address)],
-        )?;
+        let addr_info: serde_json::Value =
+            self.wallet_call("getaddressinfo", &[serde_json::json!(address)])?;
         let script_hex = addr_info["scriptPubKey"]
             .as_str()
             .context("getaddressinfo missing scriptPubKey")?;
@@ -265,12 +291,18 @@ impl<'a> RpcWallet<'a> {
                 all_cached = false;
             }
 
-            let solution = rt.block_on(async {
-                let local = tokio::task::LocalSet::new();
-                local.run_until(
-                    ipc_mining::mine_block_ipc(&socket_path, &script_bytes, cached)
-                ).await
-            }).with_context(|| format!("IPC mining failed for block '{label}'"))?;
+            let solution = rt
+                .block_on(async {
+                    let local = tokio::task::LocalSet::new();
+                    local
+                        .run_until(ipc_mining::mine_block_ipc(
+                            &socket_path,
+                            &script_bytes,
+                            cached,
+                        ))
+                        .await
+                })
+                .with_context(|| format!("IPC mining failed for block '{label}'"))?;
 
             if cached.is_none() {
                 cache.insert(label, solution);
@@ -333,7 +365,10 @@ impl<'a> RpcWallet<'a> {
 
             for tx in &raw_txs {
                 if tx.confirmations < 1 {
-                    eprintln!("⚠️  Skipping unconfirmed transaction {} (no block hash yet)", tx.txid);
+                    eprintln!(
+                        "⚠️  Skipping unconfirmed transaction {} (no block hash yet)",
+                        tx.txid
+                    );
                     continue;
                 }
 
@@ -369,7 +404,8 @@ impl<'a> RpcWallet<'a> {
         }
 
         all_txs.sort_by(|a, b| {
-            a.block_time.cmp(&b.block_time)
+            a.block_time
+                .cmp(&b.block_time)
                 .then(a.block_height.cmp(&b.block_height))
                 .then(a.vout.cmp(&b.vout))
         });
@@ -377,7 +413,10 @@ impl<'a> RpcWallet<'a> {
         Ok(all_txs)
     }
 
-    pub fn get_receive_descriptors(&self, receive_addresses: &std::collections::HashSet<String>) -> Result<Vec<String>> {
+    pub fn get_receive_descriptors(
+        &self,
+        receive_addresses: &std::collections::HashSet<String>,
+    ) -> Result<Vec<String>> {
         #[derive(Deserialize)]
         struct ListDescriptorsResult {
             descriptors: Vec<DescriptorInfo>,
@@ -398,10 +437,10 @@ impl<'a> RpcWallet<'a> {
                 continue;
             }
             let range = desc_info.range.unwrap_or([0, 0]);
-            let derived: Vec<String> = self.wallet_call("deriveaddresses", &[
-                serde_json::json!(desc_info.desc),
-                serde_json::json!(range),
-            ])?;
+            let derived: Vec<String> = self.wallet_call(
+                "deriveaddresses",
+                &[serde_json::json!(desc_info.desc), serde_json::json!(range)],
+            )?;
             if derived.iter().any(|a| receive_addresses.contains(a)) {
                 // Build multipath descriptor by combining with matched change descriptor
                 let recv_bare = desc_info.desc.split('#').next().unwrap_or(&desc_info.desc);
@@ -428,8 +467,7 @@ impl<'a> RpcWallet<'a> {
         method: &str,
         params: &[serde_json::Value],
     ) -> Result<T> {
-        self.node
-            .rpc_call_wallet(Some(&self.name), method, params)
+        self.node.rpc_call_wallet(Some(&self.name), method, params)
     }
 }
 

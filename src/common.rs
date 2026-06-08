@@ -7,8 +7,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Local, TimeZone, Utc};
 use fixed_decimal::Decimal as FixedDecimal;
-use icu_decimal::options::{DecimalFormatterOptions, GroupingStrategy};
 use icu_decimal::DecimalFormatter;
+use icu_decimal::options::{DecimalFormatterOptions, GroupingStrategy};
 use icu_locale::Locale;
 use reqwest::StatusCode;
 use reqwest::blocking::Client;
@@ -49,9 +49,8 @@ impl OutputLocale {
         let mut options = DecimalFormatterOptions::default();
         options.grouping_strategy = Some(GroupingStrategy::Never);
 
-        DecimalFormatter::try_new(self.0.clone().into(), options).with_context(|| {
-            format!("locale {} is not available for decimal formatting", self.0)
-        })
+        DecimalFormatter::try_new(self.0.clone().into(), options)
+            .with_context(|| format!("locale {} is not available for decimal formatting", self.0))
     }
 }
 
@@ -198,8 +197,8 @@ pub fn parse_output_locale(value: &str, name: &str) -> Result<OutputLocale> {
         bail!("invalid {name} value: empty");
     }
 
-    let locale = Locale::from_str(trimmed)
-        .with_context(|| format!("invalid {name} value: {trimmed}"))?;
+    let locale =
+        Locale::from_str(trimmed).with_context(|| format!("invalid {name} value: {trimmed}"))?;
 
     DecimalFormatter::try_new(locale.clone().into(), Default::default())
         .with_context(|| format!("unsupported {name} value: {trimmed}"))?;
@@ -493,8 +492,14 @@ fn parse_kraken_ohlc_response(
         .with_context(|| format!("failed to decode Kraken response from {url}"))?;
 
     if !payload.error.is_empty() {
-        if payload.error.iter().any(|e| e.contains("Too many requests")) {
-            return Err(anyhow::Error::new(RateLimitedError { retry_after_secs: None }));
+        if payload
+            .error
+            .iter()
+            .any(|e| e.contains("Too many requests"))
+        {
+            return Err(anyhow::Error::new(RateLimitedError {
+                retry_after_secs: None,
+            }));
         }
         bail!("Kraken API returned errors: {}", payload.error.join(", "));
     }
@@ -507,7 +512,12 @@ fn parse_kraken_ohlc_response(
         .get(&config.kraken_pair)
         .and_then(Value::as_array)
         .cloned()
-        .ok_or_else(|| anyhow!("Kraken response does not include pair {}", config.kraken_pair))
+        .ok_or_else(|| {
+            anyhow!(
+                "Kraken response does not include pair {}",
+                config.kraken_pair
+            )
+        })
 }
 
 fn parse_candle_row(row: &Value) -> Option<Candle> {
@@ -556,11 +566,7 @@ where
         .unwrap_or_else(|| format!("unix:{timestamp}"))
 }
 
-pub fn format_quote_value(
-    kraken_pair: &str,
-    value: f64,
-    locale: &OutputLocale,
-) -> Result<String> {
+pub fn format_quote_value(kraken_pair: &str, value: f64, locale: &OutputLocale) -> Result<String> {
     Ok(format!(
         "{}{}",
         quote_value_prefix(kraken_pair),
@@ -622,7 +628,9 @@ impl AppConfig {
         Ok(Self {
             mempool_base_url: env_or_default(get_env("MEMPOOL_BASE_URL"), DEFAULT_MEMPOOL_BASE_URL),
             kraken_pair: env_or_default(get_env("KRAKEN_PAIR"), DEFAULT_KRAKEN_PAIR),
-            default_candle_minutes: parse_default_candle_minutes(get_env("DEFAULT_CANDLE_MINUTES"))?,
+            default_candle_minutes: parse_default_candle_minutes(get_env(
+                "DEFAULT_CANDLE_MINUTES",
+            ))?,
             locale: parse_output_locale(
                 &env_or_default(get_env("LOCALE"), DEFAULT_LOCALE),
                 "LOCALE",
@@ -746,16 +754,16 @@ mod tests {
 
     #[test]
     fn env_default_candle_minutes_is_used_when_present() {
-        let interval_minutes = choose_candle_interval(None, Some(60), 1_000, 1_000 + 60)
-            .expect("interval");
+        let interval_minutes =
+            choose_candle_interval(None, Some(60), 1_000, 1_000 + 60).expect("interval");
 
         assert_eq!(interval_minutes, 60);
     }
 
     #[test]
     fn cli_candle_override_beats_env_default() {
-        let interval_minutes = choose_candle_interval(Some(15), Some(60), 1_000, 1_000 + 60)
-            .expect("interval");
+        let interval_minutes =
+            choose_candle_interval(Some(15), Some(60), 1_000, 1_000 + 60).expect("interval");
 
         assert_eq!(interval_minutes, 15);
     }
@@ -851,7 +859,10 @@ mod tests {
         })
         .expect_err("invalid config");
 
-        assert!(err.to_string().contains("unsupported DEFAULT_CANDLE_MINUTES value: 2"));
+        assert!(
+            err.to_string()
+                .contains("unsupported DEFAULT_CANDLE_MINUTES value: 2")
+        );
     }
 
     #[test]
@@ -921,7 +932,9 @@ mod tests {
             "1970-01-01T01:00:00+01:00"
         );
         let local_text = format_local_timestamp(0);
-        assert!(local_text.ends_with(":00") || local_text.contains('+') || local_text.contains('-'));
+        assert!(
+            local_text.ends_with(":00") || local_text.contains('+') || local_text.contains('-')
+        );
     }
 
     #[test]
