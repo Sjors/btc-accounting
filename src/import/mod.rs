@@ -1,3 +1,4 @@
+pub mod bitcoin_core_bip329;
 pub mod bitcoin_core_rpc;
 pub mod phoenixd_csv;
 

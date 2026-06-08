@@ -18,6 +18,7 @@ use crate::export::{Entry, Statement};
 use crate::iban::{iban_from_fingerprint, iban_from_node_id};
 use crate::import::TransactionSource;
 use crate::import::WalletTransaction;
+use crate::import::bitcoin_core_bip329::BitcoinCoreBip329;
 use crate::import::bitcoin_core_rpc::BitcoinCoreRpc;
 use crate::import::phoenixd_csv::PhoenixdCsv;
 
@@ -40,6 +41,7 @@ options:
   --bank-name <name>    Bank/institution name (default: Bitcoin Core - <wallet>)
   --candle <minutes>    Kraken candle interval (default: DEFAULT_CANDLE_MINUTES or 1440)
   --fee-threshold-cents <n>  Fold fees below this threshold into the parent entry description (default: 1)
+  --bitcoin-core-bip329 <file>  Use a Bitcoin Core rich BIP329 JSONL export as the transaction source
   --phoenixd-csv <file>  Use a Phoenixd CSV export as the transaction source
   --nodeid <id>         Phoenixd node public key (from: phoenix-cli getinfo); cached in .cache/phoenixd_node.txt
   --ignore-balance-mismatch  Warn instead of error on forward/backward balance mismatch";
@@ -59,6 +61,7 @@ pub struct ExportArgs {
     pub candle_override_minutes: Option<u32>,
     pub bank_name: Option<String>,
     pub ignore_balance_mismatch: bool,
+    pub bitcoin_core_bip329: Option<PathBuf>,
     pub phoenixd_csv: Option<PathBuf>,
     pub node_id: Option<String>,
     pub fee_threshold_cents: Option<i64>,
@@ -89,7 +92,9 @@ enum ExistingMergeMode {
 
 pub fn run(args: ExportArgs) -> Result<()> {
     let (iban, mut transactions, wallet_balance_sats, descriptors, bank_name_default) =
-        if let Some(ref csv_path) = args.phoenixd_csv {
+        if let Some(ref bip329_path) = args.bitcoin_core_bip329 {
+            run_bitcoin_core_bip329_source(bip329_path, &args)?
+        } else if let Some(ref csv_path) = args.phoenixd_csv {
             run_phoenixd_source(csv_path, &args)?
         } else {
             run_bitcoin_core_source(&args)?
@@ -395,6 +400,22 @@ fn run_phoenixd_source(csv_path: &Path, args: &ExportArgs) -> Result<SourceResul
     ))
 }
 
+fn run_bitcoin_core_bip329_source(path: &Path, args: &ExportArgs) -> Result<SourceResult> {
+    let source = BitcoinCoreBip329::from_path(path)?;
+    let iban = iban_from_fingerprint(source.fingerprint(), &args.country, &args.chain)?;
+    eprintln!("Virtual IBAN: {iban}");
+
+    let transactions = source.list_transactions()?;
+    let descriptors = source.descriptors().to_vec();
+    let bank_name_default = path
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .map(|name| format!("Bitcoin Core BIP329 - {name}"))
+        .unwrap_or_else(|| "Bitcoin Core BIP329".to_owned());
+
+    Ok((iban, transactions, None, descriptors, bank_name_default))
+}
+
 fn quote_currency_from_pair(pair: &str) -> String {
     if pair.len() >= 3 {
         pair[pair.len() - 3..].to_uppercase()
@@ -554,6 +575,7 @@ where
     let mut candle_minutes: Option<u32> = None;
     let mut bank_name: Option<String> = None;
     let mut ignore_balance_mismatch = false;
+    let mut bitcoin_core_bip329: Option<PathBuf> = None;
     let mut phoenixd_csv: Option<PathBuf> = None;
     let mut node_id: Option<String> = None;
     let mut fee_threshold_cents: Option<i64> = None;
@@ -629,6 +651,11 @@ where
                     anyhow::anyhow!("--phoenixd-csv requires a value\n\n{usage}")
                 })?));
             }
+            "--bitcoin-core-bip329" => {
+                bitcoin_core_bip329 = Some(PathBuf::from(args.next().ok_or_else(|| {
+                    anyhow::anyhow!("--bitcoin-core-bip329 requires a value\n\n{usage}")
+                })?));
+            }
             "--nodeid" => {
                 node_id = Some(
                     args.next()
@@ -662,6 +689,7 @@ where
                         }
                         "--bank-name" => bank_name = Some(value.to_owned()),
                         "--phoenixd-csv" => phoenixd_csv = Some(PathBuf::from(value)),
+                        "--bitcoin-core-bip329" => bitcoin_core_bip329 = Some(PathBuf::from(value)),
                         "--nodeid" => node_id = Some(value.to_owned()),
                         "--fee-threshold-cents" => {
                             fee_threshold_cents =
@@ -706,6 +734,10 @@ where
 
     let output = output.ok_or_else(|| anyhow::anyhow!("--output is required\n\n{usage}"))?;
 
+    if phoenixd_csv.is_some() && bitcoin_core_bip329.is_some() {
+        bail!("--phoenixd-csv and --bitcoin-core-bip329 are mutually exclusive\n\n{usage}");
+    }
+
     let fiat_mode_env = env::var("FIAT_MODE")
         .ok()
         .map(|v| v.eq_ignore_ascii_case("true"))
@@ -730,6 +762,7 @@ where
         candle_override_minutes: candle_minutes,
         bank_name,
         ignore_balance_mismatch,
+        bitcoin_core_bip329,
         phoenixd_csv,
         node_id,
         fee_threshold_cents,
@@ -782,6 +815,7 @@ mod tests {
                 candle_override_minutes: None,
                 bank_name: None,
                 ignore_balance_mismatch: false,
+                bitcoin_core_bip329: None,
                 phoenixd_csv: None,
                 node_id: None,
                 fee_threshold_cents: None,
@@ -807,6 +841,45 @@ mod tests {
         .expect("args");
 
         assert_eq!(args.candle_override_minutes, Some(60));
+    }
+
+    #[test]
+    fn parses_export_args_with_bitcoin_core_bip329_source() {
+        let args = parse_args_from(
+            vec![
+                "--country".to_owned(),
+                "NL".to_owned(),
+                "--output".to_owned(),
+                "my-wallet.xml".to_owned(),
+                "--bitcoin-core-bip329".to_owned(),
+                "labels.jsonl".to_owned(),
+            ],
+            USAGE,
+        )
+        .expect("args");
+
+        assert_eq!(args.bitcoin_core_bip329, Some("labels.jsonl".into()));
+        assert_eq!(args.phoenixd_csv, None);
+    }
+
+    #[test]
+    fn rejects_multiple_transaction_sources() {
+        let err = parse_args_from(
+            vec![
+                "--country".to_owned(),
+                "NL".to_owned(),
+                "--output".to_owned(),
+                "my-wallet.xml".to_owned(),
+                "--bitcoin-core-bip329".to_owned(),
+                "labels.jsonl".to_owned(),
+                "--phoenixd-csv".to_owned(),
+                "phoenix.csv".to_owned(),
+            ],
+            USAGE,
+        )
+        .expect_err("sources should conflict");
+
+        assert!(err.to_string().contains("mutually exclusive"));
     }
 
     #[test]
