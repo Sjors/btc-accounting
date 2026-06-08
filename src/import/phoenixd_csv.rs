@@ -41,26 +41,30 @@ impl PhoenixdCsv {
     /// include fees in amount_msat, and channel-opening credit consumption is
     /// reflected via fee_credit_msat.
     pub fn wallet_balance_sats(&self) -> i64 {
-        let total_msat: i64 = self.records.iter().map(|r| {
-            if r.tx_type == "liquidity_purchase" {
-                // Standalone fee: accounting debits gross fee, ignoring
-                // amount_msat (which equals the fee total).
-                -(r.mining_fee_sat * 1000 + r.service_fee_msat)
-            } else {
-                let is_channel_opening = r.tx_type == "lightning_received"
-                    && (r.mining_fee_sat > 0 || r.service_fee_msat > 0);
-                if is_channel_opening {
-                    // Channel opening: account_balance = channel + fee_credit.
-                    // amount_msat enters the channel, fee_credit_msat is
-                    // consumed (negative).  Sum = account balance change.
-                    r.amount_msat + r.fee_credit_msat
+        let total_msat: i64 = self
+            .records
+            .iter()
+            .map(|r| {
+                if r.tx_type == "liquidity_purchase" {
+                    // Standalone fee: accounting debits gross fee, ignoring
+                    // amount_msat (which equals the fee total).
+                    -(r.mining_fee_sat * 1000 + r.service_fee_msat)
                 } else {
-                    // Non-channel: positive credit is income, negative
-                    // credit doesn't occur (only on channel openings).
-                    r.amount_msat + r.fee_credit_msat.max(0)
+                    let is_channel_opening = r.tx_type == "lightning_received"
+                        && (r.mining_fee_sat > 0 || r.service_fee_msat > 0);
+                    if is_channel_opening {
+                        // Channel opening: account_balance = channel + fee_credit.
+                        // amount_msat enters the channel, fee_credit_msat is
+                        // consumed (negative).  Sum = account balance change.
+                        r.amount_msat + r.fee_credit_msat
+                    } else {
+                        // Non-channel: positive credit is income, negative
+                        // credit doesn't occur (only on channel openings).
+                        r.amount_msat + r.fee_credit_msat.max(0)
+                    }
                 }
-            }
-        }).sum();
+            })
+            .sum();
         msat_to_sat(total_msat)
     }
 
@@ -87,13 +91,17 @@ impl PhoenixdCsv {
                 date: fields[0].clone(),
                 id: fields[1].clone(),
                 tx_type: fields[2].clone(),
-                amount_msat: fields[3].parse::<i64>()
+                amount_msat: fields[3]
+                    .parse::<i64>()
                     .with_context(|| format!("invalid amount_msat: {}", fields[3]))?,
-                fee_credit_msat: fields[4].parse::<i64>()
+                fee_credit_msat: fields[4]
+                    .parse::<i64>()
                     .with_context(|| format!("invalid fee_credit_msat: {}", fields[4]))?,
-                mining_fee_sat: fields[5].parse::<i64>()
+                mining_fee_sat: fields[5]
+                    .parse::<i64>()
                     .with_context(|| format!("invalid mining_fee_sat: {}", fields[5]))?,
-                service_fee_msat: fields[6].parse::<i64>()
+                service_fee_msat: fields[6]
+                    .parse::<i64>()
                     .with_context(|| format!("invalid service_fee_msat: {}", fields[6]))?,
                 payment_hash: fields[7].clone(),
                 tx_id: fields[8].clone(),
@@ -111,8 +119,8 @@ impl TransactionSource for PhoenixdCsv {
         for rec in &self.records {
             // Only accept types we have test coverage for.
             match rec.tx_type.as_str() {
-                "lightning_received" | "lightning_sent" | "swap_out"
-                | "channel_close" | "liquidity_purchase" => {}
+                "lightning_received" | "lightning_sent" | "swap_out" | "channel_close"
+                | "liquidity_purchase" => {}
                 other => bail!("unsupported phoenixd transaction type: {other}"),
             }
 
@@ -419,7 +427,10 @@ mod tests {
 
         assert_eq!(txs[7].category, TxCategory::Send);
         assert_eq!(txs[7].amount_sats, -41364); // 18364 mining + 23000 service
-        assert!(matches!(txs[7].kind, crate::import::TxKind::LiquidityPurchase { .. }));
+        assert!(matches!(
+            txs[7].kind,
+            crate::import::TxKind::LiquidityPurchase { .. }
+        ));
     }
 
     #[test]
@@ -457,8 +468,14 @@ mod tests {
         assert_eq!(txs[3].label, "channel_close");
         assert_eq!(txs[4].label, "lightning_sent");
 
-        assert_eq!(txs[0].payment_hash.as_deref(), Some("462f75bff2bd054c7d1f28f3524bc6c5e1022f36369d4e0a35324674fd2b6922"));
-        assert_eq!(txs[4].payment_hash.as_deref(), Some("f6ce6b8bb04a6639cb93d0ec5d3ed1eb33448e60ac91e82f90ff76fbe84f36e1"));
+        assert_eq!(
+            txs[0].payment_hash.as_deref(),
+            Some("462f75bff2bd054c7d1f28f3524bc6c5e1022f36369d4e0a35324674fd2b6922")
+        );
+        assert_eq!(
+            txs[4].payment_hash.as_deref(),
+            Some("f6ce6b8bb04a6639cb93d0ec5d3ed1eb33448e60ac91e82f90ff76fbe84f36e1")
+        );
         assert!(txs[1].payment_hash.is_none()); // swap_out has no payment hash
     }
 
@@ -466,16 +483,28 @@ mod tests {
     fn rejects_legacy_types() {
         let csv = "date,id,type,amount_msat,fee_credit_msat,mining_fee_sat,service_fee_msat,payment_hash,tx_id\n\
                    2024-01-01T00:00:00.000Z,a,legacy_pay_to_open,1000,0,0,0,abc,\n";
-        let err = PhoenixdCsv::from_str(csv).unwrap().list_transactions().expect_err("should reject legacy type");
-        assert!(err.to_string().contains("unsupported phoenixd transaction type: legacy_pay_to_open"));
+        let err = PhoenixdCsv::from_str(csv)
+            .unwrap()
+            .list_transactions()
+            .expect_err("should reject legacy type");
+        assert!(
+            err.to_string()
+                .contains("unsupported phoenixd transaction type: legacy_pay_to_open")
+        );
     }
 
     #[test]
     fn rejects_unknown_type() {
         let csv = "date,id,type,amount_msat,fee_credit_msat,mining_fee_sat,service_fee_msat,payment_hash,tx_id\n\
                    2024-01-01T00:00:00.000Z,a,fee_bumping,1000,0,0,0,,\n";
-        let err = PhoenixdCsv::from_str(csv).unwrap().list_transactions().expect_err("should reject unknown type");
-        assert!(err.to_string().contains("unsupported phoenixd transaction type: fee_bumping"));
+        let err = PhoenixdCsv::from_str(csv)
+            .unwrap()
+            .list_transactions()
+            .expect_err("should reject unknown type");
+        assert!(
+            err.to_string()
+                .contains("unsupported phoenixd transaction type: fee_bumping")
+        );
     }
 
     /// Receives accumulate fee credits, a channel opening consumes them, then a
@@ -508,12 +537,23 @@ date,id,type,amount_msat,fee_credit_msat,mining_fee_sat,service_fee_msat,payment
         // r1 → 503 sat (credit income)
         // r2 → 340_861 sat receive + 41_364 sat gross fee
         // s1 → −300_000 sat send
-        let balance: i64 = txs.iter().map(|tx| {
-            let fee = tx.fee_sats.unwrap_or(0).unsigned_abs() as i64;
-            tx.amount_sats - if tx.category == TxCategory::Send { fee } else { 0 }
-        }).sum();
+        let balance: i64 = txs
+            .iter()
+            .map(|tx| {
+                let fee = tx.fee_sats.unwrap_or(0).unsigned_abs() as i64;
+                tx.amount_sats
+                    - if tx.category == TxCategory::Send {
+                        fee
+                    } else {
+                        0
+                    }
+            })
+            .sum();
 
-        assert_eq!(balance, 0, "sat balance must be zero when the actual msat balance is zero");
+        assert_eq!(
+            balance, 0,
+            "sat balance must be zero when the actual msat balance is zero"
+        );
     }
 
     /// When a channel opening coincides with fee-credit consumption and a
@@ -550,7 +590,10 @@ date,id,type,amount_msat,fee_credit_msat,mining_fee_sat,service_fee_msat,payment
         // P2 fee: gross 22149 sat.
         assert_eq!(txs[2].amount_sats, -22149);
         assert_eq!(txs[2].category, TxCategory::Send);
-        assert!(matches!(txs[2].kind, crate::import::TxKind::LiquidityPurchase { .. }));
+        assert!(matches!(
+            txs[2].kind,
+            crate::import::TxKind::LiquidityPurchase { .. }
+        ));
 
         // P3: BTCPay shortfall payment 8410 sat.
         assert_eq!(txs[3].amount_sats, 8410);
@@ -558,10 +601,18 @@ date,id,type,amount_msat,fee_credit_msat,mining_fee_sat,service_fee_msat,payment
 
         // Total: 13739 + 12235 − 22149 + 8410 = 12235.
         assert_eq!(source.wallet_balance_sats(), 12235);
-        let balance: i64 = txs.iter().map(|tx| {
-            let fee = tx.fee_sats.unwrap_or(0).unsigned_abs() as i64;
-            tx.amount_sats - if tx.category == TxCategory::Send { fee } else { 0 }
-        }).sum();
+        let balance: i64 = txs
+            .iter()
+            .map(|tx| {
+                let fee = tx.fee_sats.unwrap_or(0).unsigned_abs() as i64;
+                tx.amount_sats
+                    - if tx.category == TxCategory::Send {
+                        fee
+                    } else {
+                        0
+                    }
+            })
+            .sum();
         assert_eq!(balance, 12235, "accounting must match wallet balance");
     }
 }

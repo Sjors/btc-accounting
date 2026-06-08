@@ -53,9 +53,10 @@ where
         cache_rates_cmd::SUBCOMMAND_NAME => Ok(Command::CacheRates(
             cache_rates_cmd::parse_args_from(args, cache_rates_cmd::USAGE)?,
         )),
-        export_cmd::SUBCOMMAND_NAME => Ok(Command::Export(
-            export_cmd::parse_args_from(args, export_cmd::USAGE)?,
-        )),
+        export_cmd::SUBCOMMAND_NAME => Ok(Command::Export(export_cmd::parse_args_from(
+            args,
+            export_cmd::USAGE,
+        )?)),
         reconstruct_cmd::SUBCOMMAND_NAME => Ok(Command::Reconstruct(
             reconstruct_cmd::parse_args_from(args, reconstruct_cmd::USAGE)?,
         )),
@@ -115,8 +116,8 @@ mod tests {
 
     #[test]
     fn parses_cache_rates_subcommand() {
-        let command = parse_command_from(vec!["cache-rates".to_owned(), "2024".to_owned()])
-            .expect("command");
+        let command =
+            parse_command_from(vec!["cache-rates".to_owned(), "2024".to_owned()]).expect("command");
 
         match command {
             Command::CacheRates(args) => {

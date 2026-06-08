@@ -1,5 +1,5 @@
-use std::env;
 use std::collections::HashSet;
+use std::env;
 use std::fs::File;
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
@@ -9,15 +9,15 @@ use chrono::NaiveDate;
 
 use crate::accounting::{AccountingConfig, build_statement};
 use crate::common::{AppConfig, default_bitcoin_datadir};
-use crate::export::{Entry, Statement};
-use crate::export::booking_date_to_date;
-use crate::export::camt053::Camt053ParseResult;
 use crate::exchange_rate::KrakenProvider;
-use crate::export::camt053::Camt053Exporter;
 use crate::export::AccountingExporter;
+use crate::export::booking_date_to_date;
+use crate::export::camt053::Camt053Exporter;
+use crate::export::camt053::Camt053ParseResult;
+use crate::export::{Entry, Statement};
 use crate::iban::{iban_from_fingerprint, iban_from_node_id};
-use crate::import::WalletTransaction;
 use crate::import::TransactionSource;
+use crate::import::WalletTransaction;
 use crate::import::bitcoin_core_rpc::BitcoinCoreRpc;
 use crate::import::phoenixd_csv::PhoenixdCsv;
 
@@ -124,10 +124,18 @@ pub fn run(args: ExportArgs) -> Result<()> {
 
         // Consistency checks
         if parsed.account_iban != iban {
-            bail!("IBAN mismatch: file has {} but wallet fingerprint gives {}", parsed.account_iban, iban);
+            bail!(
+                "IBAN mismatch: file has {} but wallet fingerprint gives {}",
+                parsed.account_iban,
+                iban
+            );
         }
         if parsed.currency != currency {
-            bail!("currency mismatch: file has {} but current config uses {}", parsed.currency, currency);
+            bail!(
+                "currency mismatch: file has {} but current config uses {}",
+                parsed.currency,
+                currency
+            );
         }
 
         let plan = existing_export_plan_from_existing_export(args.start_date, parsed)?;
@@ -145,7 +153,11 @@ pub fn run(args: ExportArgs) -> Result<()> {
 
     if let Some(plan) = existing_plan.as_ref() {
         if !plan.existing_entry_refs.is_empty() {
-            transactions.retain(|tx| !plan.existing_entry_refs.contains(&transaction_entry_ref(tx)));
+            transactions.retain(|tx| {
+                !plan
+                    .existing_entry_refs
+                    .contains(&transaction_entry_ref(tx))
+            });
         }
         if let Some(end_exclusive) = plan.build_end_exclusive {
             let end_exclusive_ts = end_exclusive
@@ -206,17 +218,30 @@ pub fn run(args: ExportArgs) -> Result<()> {
     }
 
     // Count new entries (excluding those from the existing file)
-    let new_entries: Vec<_> = statement.entries.iter()
+    let new_entries: Vec<_> = statement
+        .entries
+        .iter()
         .filter(|e| !existing_entry_refs.contains(&e.entry_ref))
         .collect();
-    let new_tx_count = new_entries.iter().filter(|e| !e.is_fee && !e.entry_ref.starts_with(":")).count();
-    let new_mtm_count = new_entries.iter().filter(|e| e.entry_ref.starts_with(":mtm:")).count();
-    let new_fifo_count = new_entries.iter().filter(|e| e.entry_ref.starts_with(":fifo:")).count();
-    let first_date = new_entries.iter()
+    let new_tx_count = new_entries
+        .iter()
+        .filter(|e| !e.is_fee && !e.entry_ref.starts_with(":"))
+        .count();
+    let new_mtm_count = new_entries
+        .iter()
+        .filter(|e| e.entry_ref.starts_with(":mtm:"))
+        .count();
+    let new_fifo_count = new_entries
+        .iter()
+        .filter(|e| e.entry_ref.starts_with(":fifo:"))
+        .count();
+    let first_date = new_entries
+        .iter()
         .filter(|e| !e.is_fee && !e.entry_ref.starts_with(":"))
         .map(|e| e.booking_date.as_str())
         .next();
-    let last_date = new_entries.iter()
+    let last_date = new_entries
+        .iter()
         .filter(|e| !e.is_fee && !e.entry_ref.starts_with(":"))
         .map(|e| e.booking_date.as_str())
         .last();
@@ -252,13 +277,17 @@ pub fn run(args: ExportArgs) -> Result<()> {
             }
         }
     } else if new_mtm_count > 0 {
-        eprintln!("No new transactions; added {new_mtm_count} year-end mark-to-market entry/entries.");
+        eprintln!(
+            "No new transactions; added {new_mtm_count} year-end mark-to-market entry/entries."
+        );
     } else {
         eprintln!("No new transactions to export.");
     }
 
     if provider.cache_grew() {
-        eprintln!("Note: exchange rates cached in .cache/rates.json — delete when no longer needed for privacy.");
+        eprintln!(
+            "Note: exchange rates cached in .cache/rates.json — delete when no longer needed for privacy."
+        );
     }
 
     Ok(())
@@ -266,21 +295,32 @@ pub fn run(args: ExportArgs) -> Result<()> {
 
 /// Return type for the two source functions:
 /// (iban, transactions, wallet_balance_sats, descriptors, bank_name_default)
-type SourceResult = (String, Vec<WalletTransaction>, Option<i64>, Vec<String>, String);
+type SourceResult = (
+    String,
+    Vec<WalletTransaction>,
+    Option<i64>,
+    Vec<String>,
+    String,
+);
 
 fn run_bitcoin_core_source(args: &ExportArgs) -> Result<SourceResult> {
     let wallet = match &args.wallet {
         Some(w) => w.clone(),
         None => {
             let rpc_url = crate::import::bitcoin_core_rpc::rpc_url_for_chain(&args.chain)?;
-            let cookie_path = crate::import::bitcoin_core_rpc::cookie_path(&args.datadir, &args.chain);
-            let cookie = std::fs::read_to_string(&cookie_path)
-                .with_context(|| format!("failed to read cookie file at {}", cookie_path.display()))?;
+            let cookie_path =
+                crate::import::bitcoin_core_rpc::cookie_path(&args.datadir, &args.chain);
+            let cookie = std::fs::read_to_string(&cookie_path).with_context(|| {
+                format!("failed to read cookie file at {}", cookie_path.display())
+            })?;
             let wallets = BitcoinCoreRpc::list_wallets(&rpc_url, &cookie)?;
             match wallets.len() {
                 0 => bail!("no wallets loaded; specify --wallet"),
                 1 => wallets.into_iter().next().unwrap(),
-                n => bail!("{n} wallets loaded ({}) — specify --wallet", wallets.join(", ")),
+                n => bail!(
+                    "{n} wallets loaded ({}) — specify --wallet",
+                    wallets.join(", ")
+                ),
             }
         }
     };
@@ -293,7 +333,8 @@ fn run_bitcoin_core_source(args: &ExportArgs) -> Result<SourceResult> {
     let transactions = rpc.list_transactions()?;
     let wallet_balance_sats = Some(rpc.get_balance()?);
 
-    let receive_addresses: std::collections::HashSet<String> = transactions.iter()
+    let receive_addresses: std::collections::HashSet<String> = transactions
+        .iter()
         .filter(|tx| tx.category == crate::import::TxCategory::Receive)
         .map(|tx| tx.address.clone())
         .collect();
@@ -301,7 +342,13 @@ fn run_bitcoin_core_source(args: &ExportArgs) -> Result<SourceResult> {
 
     let bank_name_default = format!("Bitcoin Core - {wallet}");
 
-    Ok((iban, transactions, wallet_balance_sats, descriptors, bank_name_default))
+    Ok((
+        iban,
+        transactions,
+        wallet_balance_sats,
+        descriptors,
+        bank_name_default,
+    ))
 }
 
 fn phoenixd_node_cache_path() -> std::path::PathBuf {
@@ -339,7 +386,13 @@ fn run_phoenixd_source(csv_path: &Path, args: &ExportArgs) -> Result<SourceResul
 
     let bank_name_default = format!("Phoenixd - {node_id}");
 
-    Ok((iban, transactions, Some(wallet_balance_sats), vec![], bank_name_default))
+    Ok((
+        iban,
+        transactions,
+        Some(wallet_balance_sats),
+        vec![],
+        bank_name_default,
+    ))
 }
 
 fn quote_currency_from_pair(pair: &str) -> String {
@@ -350,7 +403,10 @@ fn quote_currency_from_pair(pair: &str) -> String {
     }
 }
 
-fn resolve_candle_minutes(candle_override_minutes: Option<u32>, default_candle_minutes: Option<u32>) -> u32 {
+fn resolve_candle_minutes(
+    candle_override_minutes: Option<u32>,
+    default_candle_minutes: Option<u32>,
+) -> u32 {
     candle_override_minutes
         .or(default_candle_minutes)
         .unwrap_or(1440)
@@ -410,9 +466,11 @@ fn existing_export_plan_from_existing_export(
 }
 
 fn parse_existing_opening_date(opening_date: Option<&str>) -> Result<NaiveDate> {
-    let opening_date = opening_date.context("existing CAMT.053 file is missing its opening balance date")?;
-    NaiveDate::parse_from_str(opening_date, "%Y-%m-%d")
-        .with_context(|| format!("invalid opening balance date in existing CAMT.053 file: {opening_date}"))
+    let opening_date =
+        opening_date.context("existing CAMT.053 file is missing its opening balance date")?;
+    NaiveDate::parse_from_str(opening_date, "%Y-%m-%d").with_context(|| {
+        format!("invalid opening balance date in existing CAMT.053 file: {opening_date}")
+    })
 }
 
 fn parse_last_booking_date(last_booking_date: Option<&str>) -> Result<Option<NaiveDate>> {
@@ -425,7 +483,12 @@ fn parse_last_booking_date(last_booking_date: Option<&str>) -> Result<Option<Nai
 }
 
 fn transaction_entry_ref(tx: &WalletTransaction) -> String {
-    format!("{}:{}:{}", tx.block_height, &tx.txid[..20.min(tx.txid.len())], tx.vout)
+    format!(
+        "{}:{}:{}",
+        tx.block_height,
+        &tx.txid[..20.min(tx.txid.len())],
+        tx.vout
+    )
 }
 
 fn merge_with_existing_statement(statement: &mut Statement, plan: ExistingExportPlan) {
@@ -451,7 +514,11 @@ fn merge_with_existing_statement(statement: &mut Statement, plan: ExistingExport
 }
 
 fn refresh_statement_totals(statement: &mut Statement) {
-    let net_entries = statement.entries.iter().map(signed_entry_amount).sum::<i64>();
+    let net_entries = statement
+        .entries
+        .iter()
+        .map(signed_entry_amount)
+        .sum::<i64>();
     statement.closing_balance_cents = statement.opening_balance_cents + net_entries;
     statement.statement_date = statement
         .entries
@@ -494,19 +561,32 @@ where
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--wallet" => {
-                wallet = Some(args.next().ok_or_else(|| anyhow::anyhow!("--wallet requires a value\n\n{usage}"))?);
+                wallet = Some(
+                    args.next()
+                        .ok_or_else(|| anyhow::anyhow!("--wallet requires a value\n\n{usage}"))?,
+                );
             }
             "--country" => {
-                country = Some(args.next().ok_or_else(|| anyhow::anyhow!("--country requires a value\n\n{usage}"))?);
+                country = Some(
+                    args.next()
+                        .ok_or_else(|| anyhow::anyhow!("--country requires a value\n\n{usage}"))?,
+                );
             }
             "--datadir" => {
-                datadir = Some(PathBuf::from(args.next().ok_or_else(|| anyhow::anyhow!("--datadir requires a value\n\n{usage}"))?));
+                datadir = Some(PathBuf::from(args.next().ok_or_else(|| {
+                    anyhow::anyhow!("--datadir requires a value\n\n{usage}")
+                })?));
             }
             "--chain" => {
-                chain = Some(args.next().ok_or_else(|| anyhow::anyhow!("--chain requires a value\n\n{usage}"))?);
+                chain = Some(
+                    args.next()
+                        .ok_or_else(|| anyhow::anyhow!("--chain requires a value\n\n{usage}"))?,
+                );
             }
             "--format" => {
-                let fmt = args.next().ok_or_else(|| anyhow::anyhow!("--format requires a value\n\n{usage}"))?;
+                let fmt = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--format requires a value\n\n{usage}"))?;
                 format = Some(match fmt.as_str() {
                     "camt053" => ExportFormat::Camt053,
                     _ => bail!("unsupported format: {fmt}\n\n{usage}"),
@@ -517,30 +597,53 @@ where
             "--no-mark-to-market" => mark_to_market = Some(false),
             "--fifo" => fifo = true,
             "--start-date" => {
-                let date_str = args.next().ok_or_else(|| anyhow::anyhow!("--start-date requires a value\n\n{usage}"))?;
-                start_date = Some(NaiveDate::parse_from_str(&date_str, "%Y-%m-%d")
-                    .with_context(|| format!("invalid date: {date_str}"))?);
+                let date_str = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--start-date requires a value\n\n{usage}"))?;
+                start_date = Some(
+                    NaiveDate::parse_from_str(&date_str, "%Y-%m-%d")
+                        .with_context(|| format!("invalid date: {date_str}"))?,
+                );
             }
             "--output" => {
-                output = Some(PathBuf::from(args.next().ok_or_else(|| anyhow::anyhow!("--output requires a value\n\n{usage}"))?));
+                output = Some(PathBuf::from(args.next().ok_or_else(|| {
+                    anyhow::anyhow!("--output requires a value\n\n{usage}")
+                })?));
             }
             "--candle" => {
-                let val = args.next().ok_or_else(|| anyhow::anyhow!("--candle requires a value\n\n{usage}"))?;
-                candle_minutes = Some(crate::common::parse_candle_interval_minutes(&val, "--candle")?);
+                let val = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--candle requires a value\n\n{usage}"))?;
+                candle_minutes = Some(crate::common::parse_candle_interval_minutes(
+                    &val, "--candle",
+                )?);
             }
             "--bank-name" => {
-                bank_name = Some(args.next().ok_or_else(|| anyhow::anyhow!("--bank-name requires a value\n\n{usage}"))?);
+                bank_name =
+                    Some(args.next().ok_or_else(|| {
+                        anyhow::anyhow!("--bank-name requires a value\n\n{usage}")
+                    })?);
             }
             "--phoenixd-csv" => {
-                phoenixd_csv = Some(PathBuf::from(args.next().ok_or_else(|| anyhow::anyhow!("--phoenixd-csv requires a value\n\n{usage}"))?));
+                phoenixd_csv = Some(PathBuf::from(args.next().ok_or_else(|| {
+                    anyhow::anyhow!("--phoenixd-csv requires a value\n\n{usage}")
+                })?));
             }
             "--nodeid" => {
-                node_id = Some(args.next().ok_or_else(|| anyhow::anyhow!("--nodeid requires a value\n\n{usage}"))?);
+                node_id = Some(
+                    args.next()
+                        .ok_or_else(|| anyhow::anyhow!("--nodeid requires a value\n\n{usage}"))?,
+                );
             }
             "--ignore-balance-mismatch" => ignore_balance_mismatch = true,
             "--fee-threshold-cents" => {
-                let val = args.next().ok_or_else(|| anyhow::anyhow!("--fee-threshold-cents requires a value\n\n{usage}"))?;
-                fee_threshold_cents = Some(val.parse::<i64>().with_context(|| format!("invalid --fee-threshold-cents: {val}"))?);
+                let val = args.next().ok_or_else(|| {
+                    anyhow::anyhow!("--fee-threshold-cents requires a value\n\n{usage}")
+                })?;
+                fee_threshold_cents = Some(
+                    val.parse::<i64>()
+                        .with_context(|| format!("invalid --fee-threshold-cents: {val}"))?,
+                );
             }
             "-h" | "--help" | "help" => bail!("{usage}"),
             _ => {
@@ -552,16 +655,25 @@ where
                         "--datadir" => datadir = Some(PathBuf::from(value)),
                         "--chain" => chain = Some(value.to_owned()),
                         "--output" => output = Some(PathBuf::from(value)),
-                        "--candle" => candle_minutes = Some(crate::common::parse_candle_interval_minutes(value, "--candle")?),
+                        "--candle" => {
+                            candle_minutes = Some(crate::common::parse_candle_interval_minutes(
+                                value, "--candle",
+                            )?)
+                        }
                         "--bank-name" => bank_name = Some(value.to_owned()),
                         "--phoenixd-csv" => phoenixd_csv = Some(PathBuf::from(value)),
                         "--nodeid" => node_id = Some(value.to_owned()),
                         "--fee-threshold-cents" => {
-                            fee_threshold_cents = Some(value.parse::<i64>().with_context(|| format!("invalid --fee-threshold-cents: {value}"))?);
+                            fee_threshold_cents =
+                                Some(value.parse::<i64>().with_context(|| {
+                                    format!("invalid --fee-threshold-cents: {value}")
+                                })?);
                         }
                         "--start-date" => {
-                            start_date = Some(NaiveDate::parse_from_str(value, "%Y-%m-%d")
-                                .with_context(|| format!("invalid date: {value}"))?);
+                            start_date = Some(
+                                NaiveDate::parse_from_str(value, "%Y-%m-%d")
+                                    .with_context(|| format!("invalid date: {value}"))?,
+                            );
                         }
                         "--format" => {
                             format = Some(match value {
@@ -578,8 +690,7 @@ where
         }
     }
 
-    let wallet = wallet
-        .or_else(|| env::var("BITCOIN_WALLET").ok());
+    let wallet = wallet.or_else(|| env::var("BITCOIN_WALLET").ok());
 
     let country = country
         .or_else(|| env::var("IBAN_COUNTRY").ok())
@@ -593,8 +704,7 @@ where
         .or_else(|| env::var("BITCOIN_DATADIR").ok().map(PathBuf::from))
         .unwrap_or_else(default_bitcoin_datadir);
 
-    let output = output
-        .ok_or_else(|| anyhow::anyhow!("--output is required\n\n{usage}"))?;
+    let output = output.ok_or_else(|| anyhow::anyhow!("--output is required\n\n{usage}"))?;
 
     let fiat_mode_env = env::var("FIAT_MODE")
         .ok()
@@ -819,7 +929,10 @@ mod tests {
         .expect_err("moving start date forward should fail");
 
         assert!(err.to_string().contains("already starts at 2025-01-01"));
-        assert!(err.to_string().contains("--start-date forward to 2025-06-01"));
+        assert!(
+            err.to_string()
+                .contains("--start-date forward to 2025-06-01")
+        );
     }
 
     #[test]

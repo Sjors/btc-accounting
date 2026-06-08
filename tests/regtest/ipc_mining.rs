@@ -34,10 +34,7 @@ pub fn load_coinbase_cache(path: &Path) -> Result<HashMap<String, CoinbaseSoluti
 }
 
 /// Save coinbase solutions to the cache file, sorted by block height.
-pub fn save_coinbase_cache(
-    path: &Path,
-    cache: &HashMap<String, CoinbaseSolution>,
-) -> Result<()> {
+pub fn save_coinbase_cache(path: &Path, cache: &HashMap<String, CoinbaseSolution>) -> Result<()> {
     // Sort keys by height order: compare text/numeric segments naturally
     let mut entries: Vec<(&String, &CoinbaseSolution)> = cache.iter().collect();
     entries.sort_by(|(a, _), (b, _)| {
@@ -49,11 +46,15 @@ pub fn save_coinbase_cache(
             while i < bytes.len() {
                 if bytes[i].is_ascii_digit() {
                     let start = i;
-                    while i < bytes.len() && bytes[i].is_ascii_digit() { i += 1; }
+                    while i < bytes.len() && bytes[i].is_ascii_digit() {
+                        i += 1;
+                    }
                     result.push(Ok(s[start..i].parse::<u32>().unwrap_or(0)));
                 } else {
                     let start = i;
-                    while i < bytes.len() && !bytes[i].is_ascii_digit() { i += 1; }
+                    while i < bytes.len() && !bytes[i].is_ascii_digit() {
+                        i += 1;
+                    }
                     result.push(Err(&s[start..i]));
                 }
             }
@@ -68,7 +69,9 @@ pub fn save_coinbase_cache(
                 (Ok(_), Err(_)) => std::cmp::Ordering::Less,
                 (Err(_), Ok(_)) => std::cmp::Ordering::Greater,
             };
-            if ord != std::cmp::Ordering::Equal { return ord; }
+            if ord != std::cmp::Ordering::Equal {
+                return ord;
+            }
         }
         sa.len().cmp(&sb.len())
     });
@@ -80,7 +83,13 @@ pub fn save_coinbase_cache(
     for (i, (key, val)) in entries.iter().enumerate() {
         let val_json = serde_json::to_string(val)?;
         let comma = if i + 1 < entries.len() { "," } else { "" };
-        writeln!(buf, "  {}: {}{}", serde_json::to_string(key)?, val_json, comma)?;
+        writeln!(
+            buf,
+            "  {}: {}{}",
+            serde_json::to_string(key)?,
+            val_json,
+            comma
+        )?;
     }
     writeln!(buf, "}}")?;
     std::fs::write(path, &buf)
@@ -99,14 +108,12 @@ pub async fn mine_block_ipc(
     coinbase_output_script: &[u8],
     cached: Option<&CoinbaseSolution>,
 ) -> Result<CoinbaseSolution> {
-    let stream = UnixStream::connect(socket_path)
-        .await
-        .with_context(|| {
-            format!(
-                "IPC connection to {} failed. Is bitcoin running with -ipcbind=unix?",
-                socket_path.display()
-            )
-        })?;
+    let stream = UnixStream::connect(socket_path).await.with_context(|| {
+        format!(
+            "IPC connection to {} failed. Is bitcoin running with -ipcbind=unix?",
+            socket_path.display()
+        )
+    })?;
 
     let (reader, writer) = stream.into_split();
     let buf_reader = BufReader::new(reader.compat());
@@ -124,11 +131,7 @@ pub async fn mine_block_ipc(
         .promise
         .await
         .context("IPC construct failed")?;
-    let thread_map = construct_resp
-        .get()
-        .unwrap()
-        .get_thread_map()
-        .unwrap();
+    let thread_map = construct_resp.get().unwrap().get_thread_map().unwrap();
     let thread_resp = thread_map
         .make_thread_request()
         .send()
@@ -195,8 +198,7 @@ pub async fn mine_block_ipc(
 
     // Build coinbase transaction
     let coinbase_tx = if let Some(cached) = cached {
-        hex::decode(&cached.coinbase_hex)
-            .context("failed to decode cached coinbase hex")?
+        hex::decode(&cached.coinbase_hex).context("failed to decode cached coinbase hex")?
     } else {
         build_coinbase_tx(
             cb_version,
@@ -216,10 +218,7 @@ pub async fn mine_block_ipc(
     if let Some(cached) = cached {
         // Use cached solution directly
         let mut req = template.submit_solution_request();
-        req.get()
-            .get_context()
-            .unwrap()
-            .set_thread(thread.clone());
+        req.get().get_context().unwrap().set_thread(thread.clone());
         req.get().set_version(cached.version);
         req.get().set_timestamp(cached.timestamp);
         req.get().set_nonce(cached.nonce);
@@ -245,10 +244,7 @@ pub async fn mine_block_ipc(
     // Brute-force nonce
     for nonce in 0..u32::MAX {
         let mut req = template.submit_solution_request();
-        req.get()
-            .get_context()
-            .unwrap()
-            .set_thread(thread.clone());
+        req.get().get_context().unwrap().set_thread(thread.clone());
         req.get().set_version(version);
         req.get().set_timestamp(timestamp);
         req.get().set_nonce(nonce);
