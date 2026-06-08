@@ -3,9 +3,12 @@ mod node;
 mod wallet;
 
 use anyhow::{Context, Result};
+use btc_fiat_value::import::{TransactionSource, TxCategory, TxKind, WalletTransaction};
 use rand::Rng;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
+use std::path::Path;
+use std::process::Command;
 
 use ipc_mining::{load_coinbase_cache, save_coinbase_cache};
 use node::RegtestNode;
@@ -61,7 +64,7 @@ fn run_salary_scenario() -> Result<()> {
         .and_utc()
         .timestamp();
 
-    let node = RegtestNode::start(&bitcoin_path, initial_time)?;
+    let mut node = RegtestNode::start(&bitcoin_path, initial_time)?;
     eprintln!("Started regtest node on port {}", node.rpc_port());
 
     // Create deterministic wallets with fixed tprv keys
@@ -194,7 +197,9 @@ fn run_salary_scenario() -> Result<()> {
     let descriptors = accounting.get_receive_descriptors(&receive_addresses)?;
     eprintln!("Found {} receive descriptor(s)", descriptors.len());
 
-    let mock_provider = MockRateProvider { rates: mock_rates };
+    let mock_provider = MockRateProvider {
+        rates: mock_rates.clone(),
+    };
     let iban = btc_fiat_value::iban::iban_from_fingerprint(&fingerprint, "NL", "regtest")?;
     eprintln!("Generated IBAN: {iban}");
 
@@ -297,7 +302,106 @@ fn run_salary_scenario() -> Result<()> {
     // Roundtrip: create watch-only wallet from embedded descriptors, verify all txs match
     verify_roundtrip(&xml, &node)?;
 
+    let bitcoin_wallet_path = node::find_bitcoin_wallet(&bitcoin_path)?;
+    let labels_path = node.datadir().join("accounting-bip329.jsonl");
+    node.stop()?;
+
+    export_bitcoin_core_bip329(
+        &bitcoin_wallet_path,
+        node.datadir(),
+        "accounting",
+        &labels_path,
+    )?;
+    let bip329_source =
+        btc_fiat_value::import::bitcoin_core_bip329::BitcoinCoreBip329::from_path(&labels_path)?;
+    eprintln!(
+        "Exported Bitcoin Core BIP329 JSONL with {} descriptor(s)",
+        bip329_source.descriptors().len()
+    );
+
+    assert_eq!(
+        bip329_source.fingerprint(),
+        fingerprint,
+        "BIP329 export fingerprint should match RPC descriptor fingerprint"
+    );
+
+    let bip329_transactions = bip329_source.list_transactions()?;
+    assert_wallet_transactions_equivalent(&transactions, &bip329_transactions);
+
+    let bip329_provider = MockRateProvider {
+        rates: mock_rates.clone(),
+    };
+    let mut bip329_statement = btc_fiat_value::accounting::build_statement(
+        &bip329_transactions,
+        &bip329_provider,
+        &config,
+    )?;
+    bip329_statement.descriptors = bip329_source.descriptors().to_vec();
+    assert!(
+        !bip329_statement.descriptors.is_empty(),
+        "BIP329 export should include descriptors"
+    );
+    assert_statement_accounting_equivalent(&statement, &bip329_statement);
+
     eprintln!("\n✅ Salary scenario passed");
+    Ok(())
+}
+
+fn export_bitcoin_core_bip329(
+    bitcoin_wallet_path: &Path,
+    datadir: &Path,
+    wallet_name: &str,
+    labels_path: &Path,
+) -> Result<()> {
+    let output = Command::new(bitcoin_wallet_path)
+        .arg(format!("-datadir={}", datadir.display()))
+        .arg("-chain=regtest")
+        .arg(format!("-wallet={wallet_name}"))
+        .arg(format!("-labelsfile={}", labels_path.display()))
+        .arg("exportlabels")
+        .output()
+        .with_context(|| {
+            format!(
+                "failed to run Bitcoin Core BIP329 export with {}",
+                bitcoin_wallet_path.display()
+            )
+        })?;
+
+    if !output.status.success() {
+        anyhow::bail!(
+            "bitcoin-wallet exportlabels failed with status {}\nstdout:\n{}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let exported = std::fs::read_to_string(labels_path)
+        .with_context(|| format!("failed to read {}", labels_path.display()))?;
+    assert!(
+        exported
+            .lines()
+            .any(|line| line.contains("\"type\":\"tx\"")),
+        "BIP329 export should include transaction records"
+    );
+    assert!(
+        exported
+            .lines()
+            .any(|line| line.contains("\"type\":\"output\"")),
+        "BIP329 export should include output records"
+    );
+    assert!(
+        exported
+            .lines()
+            .any(|line| line.contains("\"type\":\"descriptor\"")),
+        "BIP329 export should include descriptor records"
+    );
+
+    eprintln!(
+        "  Exported {} BIP329 record(s) to {}",
+        exported.lines().count(),
+        labels_path.display()
+    );
     Ok(())
 }
 
@@ -414,6 +518,160 @@ fn verify_roundtrip(xml: &str, node: &RegtestNode) -> Result<()> {
 
     eprintln!("  ✅ Roundtrip verified: {verified} transactions match");
     Ok(())
+}
+
+fn assert_wallet_transactions_equivalent(
+    rpc_transactions: &[WalletTransaction],
+    bip329_transactions: &[WalletTransaction],
+) {
+    let mut rpc: Vec<_> = rpc_transactions
+        .iter()
+        .map(comparable_wallet_transaction)
+        .collect();
+    let mut bip329: Vec<_> = bip329_transactions
+        .iter()
+        .map(comparable_wallet_transaction)
+        .collect();
+
+    rpc.sort();
+    bip329.sort();
+
+    assert_eq!(
+        rpc, bip329,
+        "Bitcoin Core RPC and BIP329 export should describe the same wallet transactions"
+    );
+    eprintln!(
+        "  BIP329 transaction equivalence verified: {} transaction(s)",
+        bip329.len()
+    );
+}
+
+#[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct ComparableWalletTransaction {
+    txid: String,
+    vout: u32,
+    amount_sats: i64,
+    fee_sats_abs: Option<i64>,
+    category: &'static str,
+    booking_date: String,
+    block_hash: String,
+    address: String,
+    label: String,
+    kind: &'static str,
+}
+
+fn comparable_wallet_transaction(tx: &WalletTransaction) -> ComparableWalletTransaction {
+    ComparableWalletTransaction {
+        txid: tx.txid.clone(),
+        vout: tx.vout,
+        amount_sats: tx.amount_sats,
+        fee_sats_abs: tx.fee_sats.map(|fee| fee.unsigned_abs() as i64),
+        category: match &tx.category {
+            TxCategory::Send => "send",
+            TxCategory::Receive => "receive",
+        },
+        // The offline wallet export currently provides wallet transaction time
+        // and may omit block height. For this daily accounting scenario, the
+        // stable cross-source key is the booking date plus full blockhash ref.
+        booking_date: timestamp_date(tx.block_time),
+        block_hash: tx.block_hash.clone(),
+        address: tx.address.clone(),
+        label: tx.label.clone(),
+        kind: match &tx.kind {
+            TxKind::Default => "default",
+            TxKind::LiquidityPurchase { .. } => "liquidity_purchase",
+        },
+    }
+}
+
+fn assert_statement_accounting_equivalent(
+    rpc_statement: &btc_fiat_value::export::Statement,
+    bip329_statement: &btc_fiat_value::export::Statement,
+) {
+    assert_eq!(
+        comparable_statement(rpc_statement),
+        comparable_statement(bip329_statement),
+        "Bitcoin Core RPC and BIP329 export should produce equivalent accounting statements"
+    );
+    eprintln!(
+        "  BIP329 accounting equivalence verified: {} statement entry/entries",
+        bip329_statement.entries.len()
+    );
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct ComparableStatement {
+    account_iban: String,
+    currency: String,
+    opening_balance_cents: i64,
+    opening_balance_sats: i64,
+    opening_rate_cents: Option<i64>,
+    entries: Vec<ComparableEntry>,
+    closing_balance_cents: i64,
+    closing_balance_sats: i64,
+    opening_date: String,
+    statement_date: String,
+    statement_id: String,
+    bank_name: Option<String>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct ComparableEntry {
+    full_ref: String,
+    booking_date: String,
+    amount_cents: i64,
+    is_credit: bool,
+    description: String,
+    is_fee: bool,
+}
+
+fn comparable_statement(statement: &btc_fiat_value::export::Statement) -> ComparableStatement {
+    ComparableStatement {
+        account_iban: statement.account_iban.clone(),
+        currency: statement.currency.clone(),
+        opening_balance_cents: statement.opening_balance_cents,
+        opening_balance_sats: statement.opening_balance_sats,
+        opening_rate_cents: statement
+            .opening_rate
+            .map(|rate| (rate * 100.0).round() as i64),
+        entries: statement.entries.iter().map(comparable_entry).collect(),
+        closing_balance_cents: statement.closing_balance_cents,
+        closing_balance_sats: statement.closing_balance_sats,
+        opening_date: statement.opening_date.clone(),
+        statement_date: statement.statement_date.clone(),
+        statement_id: statement.statement_id.clone(),
+        bank_name: statement.bank_name.clone(),
+    }
+}
+
+fn comparable_entry(entry: &btc_fiat_value::export::Entry) -> ComparableEntry {
+    ComparableEntry {
+        // Short refs and FIFO refs include block height; the current offline
+        // export does not reliably provide it, while full on-chain refs do.
+        full_ref: comparable_full_ref(&entry.full_ref),
+        booking_date: entry.booking_date.clone(),
+        amount_cents: entry.amount_cents,
+        is_credit: entry.is_credit,
+        description: entry.description.clone(),
+        is_fee: entry.is_fee,
+    }
+}
+
+fn comparable_full_ref(full_ref: &str) -> String {
+    if let Some(rest) = full_ref.strip_prefix(":fifo:") {
+        if let Some((_, suffix)) = rest.split_once(':') {
+            return format!(":fifo:<height>:{suffix}");
+        }
+    }
+    full_ref.to_owned()
+}
+
+fn timestamp_date(timestamp: i64) -> String {
+    chrono::DateTime::<chrono::Utc>::from_timestamp(timestamp, 0)
+        .expect("valid timestamp")
+        .date_naive()
+        .format("%Y-%m-%d")
+        .to_string()
 }
 
 fn skip_to_workday(date: chrono::NaiveDate) -> chrono::NaiveDate {
