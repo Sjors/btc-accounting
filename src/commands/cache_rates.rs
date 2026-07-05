@@ -261,6 +261,32 @@ pub fn run(args: CacheRatesArgs) -> Result<()> {
                 });
             }
         } else {
+            if archive_mode == ArchiveBackfillMode::Vwap && args.year == now.year() {
+                let missing_names = quarterly_files
+                    .as_ref()
+                    .map(|files| {
+                        missing_quarterly_archive_names(
+                            files,
+                            archive_mode.quarterly_archive_prefix(),
+                            args.year,
+                            &needed_quarters,
+                        )
+                    })
+                    .unwrap_or_else(|| {
+                        quarterly_archive_names(
+                            archive_mode.quarterly_archive_prefix(),
+                            args.year,
+                            &needed_quarters,
+                        )
+                    });
+                bail!(
+                    "Kraken {} quarterly archive(s) are missing for current year {}:\n- {}\nNot downloading the complete {} archive because it only appears to reach the end of the previous calendar year.",
+                    archive_mode.archive_label(),
+                    args.year,
+                    missing_names.join("\n- "),
+                    archive_mode.archive_label(),
+                );
+            }
             used_complete_archive_fallback = true;
             let file = DriveFile {
                 id: archive_mode.complete_archive_file_id().to_owned(),
@@ -676,11 +702,8 @@ fn log_quarterly_archive_coverage(
     }
 
     let names = quarterly_archive_names(file_prefix, year, needed_quarters);
-    let missing_names: Vec<_> = names
-        .iter()
-        .filter(|name| !quarterly_files.contains_key(*name))
-        .cloned()
-        .collect();
+    let missing_names =
+        missing_quarterly_archive_names(quarterly_files, file_prefix, year, needed_quarters);
 
     eprintln!(
         "Looking for Kraken {archive_label} quarterly archive(s): {}.",
@@ -704,6 +727,18 @@ fn quarterly_archive_names(
     needed_quarters
         .iter()
         .map(|quarter| format!("{file_prefix}Q{quarter}_{year}.zip"))
+        .collect()
+}
+
+fn missing_quarterly_archive_names(
+    quarterly_files: &HashMap<String, DriveFile>,
+    file_prefix: &str,
+    year: i32,
+    needed_quarters: &BTreeSet<u32>,
+) -> Vec<String> {
+    quarterly_archive_names(file_prefix, year, needed_quarters)
+        .into_iter()
+        .filter(|name| !quarterly_files.contains_key(name))
         .collect()
 }
 
@@ -2068,6 +2103,27 @@ mod tests {
         );
 
         assert!(resolved.is_none());
+    }
+
+    #[test]
+    fn names_missing_quarterly_trade_archives() {
+        let quarterly_files = HashMap::from([(
+            "Kraken_Trading_History_Q1_2026.zip".to_owned(),
+            DriveFile {
+                id: "abc123".to_owned(),
+                name: "Kraken_Trading_History_Q1_2026.zip".to_owned(),
+            },
+        )]);
+        let needed_quarters = BTreeSet::from([1_u32, 2_u32]);
+
+        let missing = super::missing_quarterly_archive_names(
+            &quarterly_files,
+            "Kraken_Trading_History_",
+            2026,
+            &needed_quarters,
+        );
+
+        assert_eq!(missing, vec!["Kraken_Trading_History_Q2_2026.zip"]);
     }
 
     #[test]
