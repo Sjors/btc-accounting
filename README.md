@@ -26,6 +26,7 @@ Populate `.cache/rates.json` for one UTC calendar year of Bitcoin rates.
 cargo run -- cache-rates 2024
 cargo run -- cache-rates --vwap 2024
 cargo run -- cache-rates --vwap --candle 60 2024
+cargo run -- cache-rates --vwap --candle 60 --until 2026-06
 ```
 
 The command works as follows:
@@ -36,6 +37,11 @@ The command works as follows:
    the default OHLCVT archive, or the larger time-and-sales archive when `--vwap` is set.
 
 By default, the cache keys are written as normal `1440`-minute entries. With `--vwap`, the command writes entries at `DEFAULT_CANDLE_MINUTES` if configured, or `1440` otherwise; `--candle <minutes>` overrides that in the normal way.
+
+Use `--until <YYYY-MM|YYYY-MM-DD>` to cache only part of the requested UTC
+calendar year. A month value is inclusive, so `--until 2026-06` caches
+from `2026-01-01T00:00:00Z` through June and stops before
+`2026-07-01T00:00:00Z`. A day value is also inclusive.
 
 Trade-off:
 

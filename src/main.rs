@@ -169,6 +169,32 @@ mod tests {
     }
 
     #[test]
+    fn parses_cache_rates_until_subcommand() {
+        let command = parse_command_from(vec![
+            "cache-rates".to_owned(),
+            "--vwap".to_owned(),
+            "--candle".to_owned(),
+            "60".to_owned(),
+            "--until".to_owned(),
+            "2026-06".to_owned(),
+        ])
+        .expect("command");
+
+        match command {
+            Command::CacheRates(args) => {
+                assert_eq!(args.year, 2026);
+                assert!(args.use_vwap_archive);
+                assert_eq!(args.candle_override_minutes, Some(60));
+                assert_eq!(
+                    args.until_end_exclusive,
+                    Some(chrono::NaiveDate::from_ymd_opt(2026, 7, 1).unwrap())
+                );
+            }
+            _ => panic!("expected CacheRates"),
+        }
+    }
+
+    #[test]
     fn parses_reconstruct_subcommand() {
         let command = parse_command_from(vec![
             "reconstruct".to_owned(),

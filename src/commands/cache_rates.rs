@@ -4,7 +4,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::{Datelike, NaiveDate, Utc};
+use chrono::{Datelike, Months, NaiveDate, Utc};
 use csv::StringRecord;
 use reqwest::blocking::{Client, Response};
 use zip::ZipArchive;
@@ -16,7 +16,7 @@ use crate::common::{
 use crate::exchange_rate::{CACHE_DIR, cache_key, cache_path, load_disk_cache, save_disk_cache};
 
 pub const SUBCOMMAND_NAME: &str = "cache-rates";
-pub const USAGE: &str = "usage: btc_fiat_value cache-rates [--vwap] [--candle <minutes>] <year>";
+pub const USAGE: &str = "usage: btc_fiat_value cache-rates [--vwap] [--candle <minutes>] [--until <YYYY-MM|YYYY-MM-DD>] [year]";
 
 const KRAKEN_DAILY_INTERVAL_MINUTES: u32 = 1_440;
 const QUARTERLY_ARCHIVE_FIRST_YEAR: i32 = 2023;
@@ -38,6 +38,7 @@ pub struct CacheRatesArgs {
     pub year: i32,
     pub use_vwap_archive: bool,
     pub candle_override_minutes: Option<u32>,
+    pub until_end_exclusive: Option<NaiveDate>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -120,7 +121,12 @@ pub fn run(args: CacheRatesArgs) -> Result<()> {
     };
     let target_interval_minutes = target_interval_minutes(&args, &config)?;
     let now = Utc::now();
-    let (start_ts, end_ts) = closed_interval_year_bounds(args.year, now, target_interval_minutes)?;
+    let (start_ts, end_ts) = closed_interval_year_bounds(
+        args.year,
+        now,
+        target_interval_minutes,
+        args.until_end_exclusive,
+    )?;
 
     let mut missing_starts =
         expected_interval_starts(start_ts, end_ts, target_interval_minutes);
@@ -402,6 +408,7 @@ where
     let mut year = None;
     let mut use_vwap_archive = false;
     let mut candle_override_minutes = None;
+    let mut until = None;
     let mut args = args.into_iter();
 
     while let Some(arg) = args.next() {
@@ -418,6 +425,15 @@ where
             candle_override_minutes = Some(parse_candle_interval_minutes(value, "--candle")?);
             continue;
         }
+        if arg == "--until" {
+            let value = args.next().ok_or_else(|| anyhow!("{usage}"))?;
+            until = Some(value);
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("--until=") {
+            until = Some(value.to_owned());
+            continue;
+        }
 
         if year.is_some() {
             bail!("{usage}");
@@ -429,16 +445,66 @@ where
         bail!("--candle requires --vwap\n\n{usage}");
     }
 
-    let year = year.ok_or_else(|| anyhow!("{usage}"))?;
-    let year = year
-        .parse::<i32>()
-        .with_context(|| format!("invalid year: {year}"))?;
+    let year = match (year, until.as_deref()) {
+        (Some(year), _) => year
+            .parse::<i32>()
+            .with_context(|| format!("invalid year: {year}"))?,
+        (None, Some(until)) => parse_until_year(until)?,
+        (None, None) => bail!("{usage}"),
+    };
+    let until_end_exclusive = until
+        .as_deref()
+        .map(|value| parse_until_end_exclusive(value, year))
+        .transpose()?;
 
     Ok(CacheRatesArgs {
         year,
         use_vwap_archive,
         candle_override_minutes,
+        until_end_exclusive,
     })
+}
+
+fn parse_until_year(value: &str) -> Result<i32> {
+    let (year_value, _) = value
+        .split_once('-')
+        .ok_or_else(|| anyhow!("invalid --until value: {value}"))?;
+    year_value
+        .parse::<i32>()
+        .with_context(|| format!("invalid --until value: {value}"))
+}
+
+fn parse_until_end_exclusive(value: &str, year: i32) -> Result<NaiveDate> {
+    if let Some((year_value, month_value)) = value.split_once('-') {
+        if !month_value.contains('-') {
+            let until_year = year_value
+                .parse::<i32>()
+                .with_context(|| format!("invalid --until value: {value}"))?;
+            let until_month = month_value
+                .parse::<u32>()
+                .with_context(|| format!("invalid --until value: {value}"))?;
+            if until_year != year {
+                bail!("--until year {until_year} does not match requested year {year}");
+            }
+            let month_start = NaiveDate::from_ymd_opt(until_year, until_month, 1)
+                .ok_or_else(|| anyhow!("invalid --until value: {value}"))?;
+            return month_start
+                .checked_add_months(Months::new(1))
+                .ok_or_else(|| anyhow!("invalid --until value: {value}"));
+        }
+    }
+
+    let until_date = NaiveDate::parse_from_str(value, "%Y-%m-%d")
+        .with_context(|| format!("invalid --until value: {value}"))?;
+    if until_date.year() != year {
+        bail!(
+            "--until year {} does not match requested year {year}",
+            until_date.year()
+        );
+    }
+    until_date
+        .succ_opt()
+        .ok_or_else(|| anyhow!("invalid --until value: {value}"))
 }
 
 fn target_interval_minutes(args: &CacheRatesArgs, config: &AppConfig) -> Result<u32> {
@@ -456,6 +522,7 @@ fn closed_interval_year_bounds(
     year: i32,
     now: chrono::DateTime<Utc>,
     interval_minutes: u32,
+    until_end_exclusive: Option<NaiveDate>,
 ) -> Result<(i64, i64)> {
     let year_start = NaiveDate::from_ymd_opt(year, 1, 1)
         .ok_or_else(|| anyhow!("invalid year: {year}"))?;
@@ -469,20 +536,25 @@ fn closed_interval_year_bounds(
         bail!("year {year} is in the future");
     }
 
-    let year_end_exclusive = if year == now.year() {
+    let natural_year_end_exclusive = if year == now.year() {
         now.timestamp().div_euclid(interval_seconds) * interval_seconds
     } else {
         next_year_start_ts
     };
+    let requested_end_exclusive = until_end_exclusive
+        .map(midnight_utc_timestamp)
+        .unwrap_or(natural_year_end_exclusive)
+        .min(natural_year_end_exclusive)
+        .min(next_year_start_ts);
 
-    if year_start_ts >= year_end_exclusive {
+    if year_start_ts >= requested_end_exclusive {
         bail!(
             "year {year} has no closed UTC {}-minute candles yet",
             interval_minutes
         );
     }
 
-    Ok((year_start_ts, year_end_exclusive.min(next_year_start_ts)))
+    Ok((year_start_ts, requested_end_exclusive))
 }
 
 fn expected_interval_starts(start_ts: i64, end_ts: i64, interval_minutes: u32) -> BTreeSet<i64> {
@@ -1565,6 +1637,8 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    use chrono::NaiveDate;
+
     use crate::common::AppConfig;
 
     use super::{
@@ -1601,7 +1675,7 @@ mod tests {
     fn parses_cache_rates_args() {
         let args = parse_args_from(
             vec!["2024".to_owned()],
-            "usage: btc_fiat_value cache-rates [--vwap] [--candle <minutes>] <year>",
+            super::USAGE,
         )
         .expect("args");
         assert_eq!(
@@ -1610,6 +1684,7 @@ mod tests {
                 year: 2024,
                 use_vwap_archive: false,
                 candle_override_minutes: None,
+                until_end_exclusive: None,
             }
         );
     }
@@ -1618,7 +1693,7 @@ mod tests {
     fn parses_cache_rates_vwap_flag() {
         let args = parse_args_from(
             vec!["--vwap".to_owned(), "2024".to_owned()],
-            "usage: btc_fiat_value cache-rates [--vwap] [--candle <minutes>] <year>",
+            super::USAGE,
         )
         .expect("args");
         assert_eq!(
@@ -1627,6 +1702,7 @@ mod tests {
                 year: 2024,
                 use_vwap_archive: true,
                 candle_override_minutes: None,
+                until_end_exclusive: None,
             }
         );
     }
@@ -1640,7 +1716,7 @@ mod tests {
                 "60".to_owned(),
                 "2024".to_owned(),
             ],
-            "usage: btc_fiat_value cache-rates [--vwap] [--candle <minutes>] <year>",
+            super::USAGE,
         )
         .expect("args");
         assert_eq!(
@@ -1649,28 +1725,106 @@ mod tests {
                 year: 2024,
                 use_vwap_archive: true,
                 candle_override_minutes: Some(60),
+                until_end_exclusive: None,
             }
         );
+    }
+
+    #[test]
+    fn parses_cache_rates_until_month() {
+        let args = parse_args_from(
+            vec![
+                "--vwap".to_owned(),
+                "--candle".to_owned(),
+                "60".to_owned(),
+                "--until".to_owned(),
+                "2026-06".to_owned(),
+            ],
+            super::USAGE,
+        )
+        .expect("args");
+
+        assert_eq!(
+            args,
+            CacheRatesArgs {
+                year: 2026,
+                use_vwap_archive: true,
+                candle_override_minutes: Some(60),
+                until_end_exclusive: Some(NaiveDate::from_ymd_opt(2026, 7, 1).unwrap()),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_cache_rates_until_day_inclusive() {
+        let args = parse_args_from(
+            vec![
+                "--until=2026-06-30".to_owned(),
+                "--vwap".to_owned(),
+            ],
+            super::USAGE,
+        )
+        .expect("args");
+
+        assert_eq!(args.year, 2026);
+        assert_eq!(
+            args.until_end_exclusive,
+            Some(NaiveDate::from_ymd_opt(2026, 7, 1).unwrap())
+        );
+    }
+
+    #[test]
+    fn accepts_cache_rates_until_when_year_matches() {
+        let args = parse_args_from(
+            vec![
+                "--until".to_owned(),
+                "2026-06".to_owned(),
+                "2026".to_owned(),
+            ],
+            super::USAGE,
+        )
+        .expect("args");
+
+        assert_eq!(args.year, 2026);
+        assert_eq!(
+            args.until_end_exclusive,
+            Some(NaiveDate::from_ymd_opt(2026, 7, 1).unwrap())
+        );
+    }
+
+    #[test]
+    fn rejects_cache_rates_until_for_conflicting_year() {
+        let err = parse_args_from(
+            vec![
+                "--until".to_owned(),
+                "2025-12".to_owned(),
+                "2026".to_owned(),
+            ],
+            super::USAGE,
+        )
+        .expect_err("should fail");
+
+        assert!(err.to_string().contains("does not match requested year 2026"));
     }
 
     #[test]
     fn rejects_extra_cache_rates_args() {
         let err = parse_args_from(
             vec!["2024".to_owned(), "extra".to_owned()],
-            "usage: btc_fiat_value cache-rates [--vwap] [--candle <minutes>] <year>",
+            super::USAGE,
         )
         .expect_err("should fail");
 
         assert!(err
             .to_string()
-            .contains("usage: btc_fiat_value cache-rates [--vwap] [--candle <minutes>] <year>"));
+            .contains("usage: btc_fiat_value cache-rates"));
     }
 
     #[test]
     fn rejects_cache_rates_candle_override_without_vwap() {
         let err = parse_args_from(
             vec!["--candle".to_owned(), "60".to_owned(), "2024".to_owned()],
-            "usage: btc_fiat_value cache-rates [--vwap] [--candle <minutes>] <year>",
+            super::USAGE,
         )
         .expect_err("should fail");
 
@@ -1690,6 +1844,7 @@ mod tests {
                 year: 2024,
                 use_vwap_archive: true,
                 candle_override_minutes: None,
+                until_end_exclusive: None,
             },
             &config,
         )
@@ -1711,12 +1866,35 @@ mod tests {
                 year: 2024,
                 use_vwap_archive: true,
                 candle_override_minutes: Some(240),
+                until_end_exclusive: None,
             },
             &config,
         )
         .expect("interval");
 
         assert_eq!(interval, 240);
+    }
+
+    #[test]
+    fn closed_interval_bounds_respect_until_month() {
+        let now = chrono::DateTime::from_timestamp(1_783_108_800, 0).unwrap(); // 2026-07-03T20:00:00Z
+
+        let (start_ts, end_ts) = super::closed_interval_year_bounds(
+            2026,
+            now,
+            60,
+            Some(NaiveDate::from_ymd_opt(2026, 7, 1).unwrap()),
+        )
+        .expect("bounds");
+
+        assert_eq!(
+            start_ts,
+            super::midnight_utc_timestamp(NaiveDate::from_ymd_opt(2026, 1, 1).unwrap())
+        );
+        assert_eq!(
+            end_ts,
+            super::midnight_utc_timestamp(NaiveDate::from_ymd_opt(2026, 7, 1).unwrap())
+        );
     }
 
     #[test]
