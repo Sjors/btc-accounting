@@ -8,7 +8,9 @@ use std::time::Duration;
 use anyhow::{Result, anyhow};
 use reqwest::blocking::Client;
 
-use crate::common::{AppConfig, Candle, RateLimitedError, build_http_client, fetch_candle_for_timestamp};
+use crate::common::{
+    AppConfig, Candle, RateLimitedError, build_http_client, fetch_candle_for_timestamp,
+};
 
 pub const CACHE_DIR: &str = ".cache";
 pub const CACHE_FILE: &str = "rates.json";
@@ -58,7 +60,10 @@ impl KrakenProvider {
 
     /// Returns true if new entries were written to the disk cache.
     pub fn cache_grew(&self) -> bool {
-        self.cache.lock().map(|c| c.len() > self.initial_cache_size).unwrap_or(false)
+        self.cache
+            .lock()
+            .map(|c| c.len() > self.initial_cache_size)
+            .unwrap_or(false)
     }
 
     fn fetch_candle(&self, timestamp: i64, interval_minutes: u32) -> Result<Candle> {

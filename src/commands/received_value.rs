@@ -3,11 +3,10 @@ use std::io::{self, IsTerminal, Write};
 use anyhow::{Context, Result, anyhow, bail};
 
 use crate::common::{
-    AppConfig, build_http_client, available_candle_intervals, choose_candle_interval,
+    AppConfig, OutputLocale, available_candle_intervals, build_http_client, choose_candle_interval,
     current_unix_timestamp, fetch_candle_for_timestamp, fetch_kraken_candle_with_fallback,
-    find_unique_receive_transaction, format_local_timestamp, format_number,
-    format_quote_value, parse_candle_interval_minutes, parse_output_locale, sats_to_btc,
-    OutputLocale,
+    find_unique_receive_transaction, format_local_timestamp, format_number, format_quote_value,
+    parse_candle_interval_minutes, parse_output_locale, sats_to_btc,
 };
 
 pub const SUBCOMMAND_NAME: &str = "received-value";
@@ -52,7 +51,9 @@ pub fn run(args: ReceivedValueArgs) -> Result<()> {
         block_time,
         now,
     )?;
-    let locale = args.locale_override.unwrap_or_else(|| config.locale.clone());
+    let locale = args
+        .locale_override
+        .unwrap_or_else(|| config.locale.clone());
 
     let candle = match tor_kraken_client.as_ref() {
         Some(kraken_client) => fetch_kraken_candle_with_fallback(
@@ -80,7 +81,10 @@ pub fn run(args: ReceivedValueArgs) -> Result<()> {
         "candle_vwap: {}",
         format_quote_value(&config.kraken_pair, candle.vwap, &locale)?
     );
-    println!("{}", format_quote_value(&config.kraken_pair, quote_value, &locale)?);
+    println!(
+        "{}",
+        format_quote_value(&config.kraken_pair, quote_value, &locale)?
+    );
 
     Ok(())
 }
@@ -106,7 +110,9 @@ fn run_interactive(config: AppConfig, args: ReceivedValueArgs) -> Result<()> {
     let default_interval = args
         .candle_override_minutes
         .filter(|m| available.contains(m))
-        .or(config.default_candle_minutes.filter(|m| available.contains(m)))
+        .or(config
+            .default_candle_minutes
+            .filter(|m| available.contains(m)))
         .unwrap_or(available[0]);
 
     let available_str = available
@@ -181,9 +187,7 @@ fn prompt_required(label: &str) -> Result<String> {
         stderr.flush().context("failed to flush prompt")?;
 
         line.clear();
-        stdin
-            .read_line(&mut line)
-            .context("failed to read input")?;
+        stdin.read_line(&mut line).context("failed to read input")?;
 
         let trimmed = line.trim();
         if !trimmed.is_empty() {
@@ -200,9 +204,7 @@ fn prompt_with_default(label: &str, default: &str) -> Result<String> {
     write!(stderr, "{label} [{default}]: ").context("failed to write prompt")?;
     stderr.flush().context("failed to flush prompt")?;
 
-    stdin
-        .read_line(&mut line)
-        .context("failed to read input")?;
+    stdin.read_line(&mut line).context("failed to read input")?;
 
     let trimmed = line.trim();
     if trimmed.is_empty() {

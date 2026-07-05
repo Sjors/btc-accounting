@@ -4,8 +4,8 @@ mod wallet;
 
 use anyhow::{Context, Result};
 use rand::Rng;
-use rand::rngs::StdRng;
 use rand::SeedableRng;
+use rand::rngs::StdRng;
 
 use ipc_mining::{load_coinbase_cache, save_coinbase_cache};
 use node::RegtestNode;
@@ -71,7 +71,8 @@ fn run_salary_scenario() -> Result<()> {
 
     // Generate initial blocks for maturity (100-block coinbase maturity + 1)
     let mining_addr = mining.get_new_address()?;
-    let all_cached = mining.mine_blocks_ipc(101, &mining_addr, "maturity-", &mut coinbase_cache, &rt)?;
+    let all_cached =
+        mining.mine_blocks_ipc(101, &mining_addr, "maturity-", &mut coinbase_cache, &rt)?;
     if !all_cached {
         eprintln!("⚠️  Cache miss during maturity blocks — output may not be deterministic");
     }
@@ -121,13 +122,14 @@ fn run_salary_scenario() -> Result<()> {
         }
         mining.send_to_address(&accounting_addr, salary_sats)?;
         let label = format!("salary-{month}-");
-        let all_cached = mining.mine_blocks_ipc(1, &mining_addr, &label, &mut coinbase_cache, &rt)?;
+        let all_cached =
+            mining.mine_blocks_ipc(1, &mining_addr, &label, &mut coinbase_cache, &rt)?;
         if !all_cached {
-            eprintln!("⚠️  Cache miss at month {month} salary block — output may not be deterministic");
+            eprintln!(
+                "⚠️  Cache miss at month {month} salary block — output may not be deterministic"
+            );
         }
-        eprintln!(
-            "Month {month}: Received {salary_sats} sats (€5,000 at rate {rate:.2})"
-        );
+        eprintln!("Month {month}: Received {salary_sats} sats (€5,000 at rate {rate:.2})");
 
         // Random delay before spending (0-5 days), during daytime CET (14:00-20:00 CET = 13:00-19:00 UTC)
         let delay_days: i64 = rng.random_range(0..=5);
@@ -151,9 +153,12 @@ fn run_salary_scenario() -> Result<()> {
             }
             accounting.send_to_address(&mining_addr_spend, spend_sats)?;
             let label = format!("spend-{month}-");
-            let all_cached = mining.mine_blocks_ipc(1, &mining_addr, &label, &mut coinbase_cache, &rt)?;
+            let all_cached =
+                mining.mine_blocks_ipc(1, &mining_addr, &label, &mut coinbase_cache, &rt)?;
             if !all_cached {
-                eprintln!("⚠️  Cache miss at month {month} spend block — output may not be deterministic");
+                eprintln!(
+                    "⚠️  Cache miss at month {month} spend block — output may not be deterministic"
+                );
             }
             eprintln!(
                 "  Spent {spend_sats} sats ({:.0}%) after {delay_days} day(s)",
@@ -181,7 +186,8 @@ fn run_salary_scenario() -> Result<()> {
     eprintln!("Listed {} transactions", transactions.len());
 
     // Collect receive addresses and fetch matching watch-only descriptors
-    let receive_addresses: std::collections::HashSet<String> = transactions.iter()
+    let receive_addresses: std::collections::HashSet<String> = transactions
+        .iter()
         .filter(|tx| tx.category == btc_fiat_value::import::TxCategory::Receive)
         .map(|tx| tx.address.clone())
         .collect();
@@ -207,7 +213,8 @@ fn run_salary_scenario() -> Result<()> {
         fee_threshold_cents: 1,
     };
 
-    let mut statement = btc_fiat_value::accounting::build_statement(&transactions, &mock_provider, &config)?;
+    let mut statement =
+        btc_fiat_value::accounting::build_statement(&transactions, &mock_provider, &config)?;
     statement.descriptors = descriptors;
 
     // Write CAMT.053 output
@@ -238,22 +245,43 @@ fn run_salary_scenario() -> Result<()> {
     assert!(entry_count > 0, "expected at least one entry");
 
     // Verify mark-to-market entry exists
-    assert!(xml.contains(":mtm:2025-12-31"), "expected mark-to-market entry");
+    assert!(
+        xml.contains(":mtm:2025-12-31"),
+        "expected mark-to-market entry"
+    );
 
     // Verify watch-only descriptors are included as comments
-    assert!(xml.contains("Watch-only descriptors"), "expected descriptor comments");
+    assert!(
+        xml.contains("Watch-only descriptors"),
+        "expected descriptor comments"
+    );
     assert!(xml.contains("tpub"), "expected tpub in descriptor comments");
 
     // Verify BTC opening balance comment includes rate, and sanity-check the fiat value
-    let balance_comment = xml.lines()
+    let balance_comment = xml
+        .lines()
         .find(|l| l.contains("BTC opening balance"))
         .expect("expected BTC opening balance comment");
-    assert!(balance_comment.contains(" @ "), "expected rate in BTC opening balance comment");
+    assert!(
+        balance_comment.contains(" @ "),
+        "expected rate in BTC opening balance comment"
+    );
     // Parse: "<!-- BTC opening balance: 0.00100000 BTC @ 95277.13 -->"
     let after_colon = balance_comment.split(':').last().unwrap().trim();
     let parts: Vec<&str> = after_colon.split(" @ ").collect();
-    let btc: f64 = parts[0].trim().split_whitespace().next().unwrap().parse().unwrap();
-    let rate: f64 = parts[1].trim().trim_end_matches("-->").trim().parse().unwrap();
+    let btc: f64 = parts[0]
+        .trim()
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let rate: f64 = parts[1]
+        .trim()
+        .trim_end_matches("-->")
+        .trim()
+        .parse()
+        .unwrap();
     let fiat_from_comment = btc * rate;
     let opening_cents = statement.opening_balance_cents;
     let opening_fiat = opening_cents as f64 / 100.0;
@@ -278,7 +306,10 @@ fn verify_reconstruction(xml: &str, node: &RegtestNode) -> Result<()> {
     let mut count = 0;
     for line in xml.lines() {
         let line = line.trim();
-        if let Some(content) = line.strip_prefix("<AddtlNtryInf>").and_then(|s| s.strip_suffix("</AddtlNtryInf>")) {
+        if let Some(content) = line
+            .strip_prefix("<AddtlNtryInf>")
+            .and_then(|s| s.strip_suffix("</AddtlNtryInf>"))
+        {
             // Skip virtual entries (prefixed with :)
             if content.starts_with(':') {
                 continue;
@@ -286,7 +317,11 @@ fn verify_reconstruction(xml: &str, node: &RegtestNode) -> Result<()> {
 
             // Format: blockhash:txid:vout
             let parts: Vec<&str> = content.split(':').collect();
-            assert_eq!(parts.len(), 3, "expected blockhash:txid:vout, got: {content}");
+            assert_eq!(
+                parts.len(),
+                3,
+                "expected blockhash:txid:vout, got: {content}"
+            );
 
             let blockhash = parts[0];
             let txid = parts[1];
@@ -297,13 +332,9 @@ fn verify_reconstruction(xml: &str, node: &RegtestNode) -> Result<()> {
                 &[serde_json::json!(blockhash), serde_json::json!(1)],
             )?;
 
-            let block_txids = block["tx"]
-                .as_array()
-                .context("block has no tx array")?;
+            let block_txids = block["tx"].as_array().context("block has no tx array")?;
 
-            let found = block_txids
-                .iter()
-                .any(|t| t.as_str() == Some(txid));
+            let found = block_txids.iter().any(|t| t.as_str() == Some(txid));
 
             assert!(found, "txid {txid} not found in block {blockhash}");
             count += 1;
@@ -318,9 +349,15 @@ fn verify_reconstruction(xml: &str, node: &RegtestNode) -> Result<()> {
 fn verify_roundtrip(xml: &str, node: &RegtestNode) -> Result<()> {
     // Parse descriptors from XML comments
     let parsed = btc_fiat_value::export::camt053::parse_camt053(xml)?;
-    assert!(!parsed.descriptors.is_empty(), "expected descriptors in XML");
+    assert!(
+        !parsed.descriptors.is_empty(),
+        "expected descriptors in XML"
+    );
 
-    eprintln!("\nRoundtrip: creating watch-only wallet from {} descriptor(s)...", parsed.descriptors.len());
+    eprintln!(
+        "\nRoundtrip: creating watch-only wallet from {} descriptor(s)...",
+        parsed.descriptors.len()
+    );
 
     // Create watch-only wallet and import descriptors
     let watch_only = RpcWallet::create_watch_only(node, "roundtrip", &parsed.descriptors)?;
@@ -328,10 +365,14 @@ fn verify_roundtrip(xml: &str, node: &RegtestNode) -> Result<()> {
 
     // List transactions from the reconstructed wallet
     let wallet_txs = watch_only.list_transactions()?;
-    eprintln!("  Found {} transactions in watch-only wallet", wallet_txs.len());
+    eprintln!(
+        "  Found {} transactions in watch-only wallet",
+        wallet_txs.len()
+    );
 
     // Build lookup set of txid:vout from the wallet
-    let wallet_tx_set: std::collections::HashSet<String> = wallet_txs.iter()
+    let wallet_tx_set: std::collections::HashSet<String> = wallet_txs
+        .iter()
         .map(|tx| format!("{}:{}", tx.txid, tx.vout))
         .collect();
 
@@ -365,7 +406,10 @@ fn verify_roundtrip(xml: &str, node: &RegtestNode) -> Result<()> {
         for ref_id in &missing {
             eprintln!("  Missing: {ref_id}");
         }
-        anyhow::bail!("{} transaction(s) from XML not found in watch-only wallet", missing.len());
+        anyhow::bail!(
+            "{} transaction(s) from XML not found in watch-only wallet",
+            missing.len()
+        );
     }
 
     eprintln!("  ✅ Roundtrip verified: {verified} transactions match");
@@ -383,9 +427,18 @@ fn skip_to_workday(date: chrono::NaiveDate) -> chrono::NaiveDate {
 
 fn month_name(month: usize) -> &'static str {
     match month {
-        1 => "January", 2 => "February", 3 => "March", 4 => "April",
-        5 => "May", 6 => "June", 7 => "July", 8 => "August",
-        9 => "September", 10 => "October", 11 => "November", 12 => "December",
+        1 => "January",
+        2 => "February",
+        3 => "March",
+        4 => "April",
+        5 => "May",
+        6 => "June",
+        7 => "July",
+        8 => "August",
+        9 => "September",
+        10 => "October",
+        11 => "November",
+        12 => "December",
         _ => "Unknown",
     }
 }

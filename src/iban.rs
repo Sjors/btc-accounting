@@ -146,7 +146,10 @@ mod tests {
         let node_id = "03864ef025fde8fb587d989186ce6a4a186895ee44a926bfc370e2c366597a3f8f";
         let iban = iban_from_node_id(node_id, "FR").unwrap();
         assert!(iban.starts_with("FR"));
-        assert!(iban.contains("LNBT"), "IBAN should use LNBT bank code: {iban}");
+        assert!(
+            iban.contains("LNBT"),
+            "IBAN should use LNBT bank code: {iban}"
+        );
         assert_eq!(iban.len(), 18);
         let numeric = alpha_to_numeric(&format!("{}{}", &iban[4..], &iban[..4]));
         assert_eq!(mod97(&numeric), 1, "IBAN {iban} should pass mod-97 check");

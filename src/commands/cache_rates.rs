@@ -128,8 +128,7 @@ pub fn run(args: CacheRatesArgs) -> Result<()> {
         args.until_end_exclusive,
     )?;
 
-    let mut missing_starts =
-        expected_interval_starts(start_ts, end_ts, target_interval_minutes);
+    let mut missing_starts = expected_interval_starts(start_ts, end_ts, target_interval_minutes);
     let mut cache = load_disk_cache();
     let existing_cache_count = count_cached_starts(
         &missing_starts,
@@ -146,7 +145,8 @@ pub fn run(args: CacheRatesArgs) -> Result<()> {
         );
     }
     let full_span_quarters = missing_quarters(&missing_starts);
-    let quarterly_files = if !missing_starts.is_empty() && args.year >= QUARTERLY_ARCHIVE_FIRST_YEAR {
+    let quarterly_files = if !missing_starts.is_empty() && args.year >= QUARTERLY_ARCHIVE_FIRST_YEAR
+    {
         let archive_client = build_http_client("Kraken archive", None)?;
         eprintln!(
             "Fetching Kraken {} archive listing for {}...",
@@ -184,15 +184,10 @@ pub fn run(args: CacheRatesArgs) -> Result<()> {
         let kraken_client = build_http_client("clearnet Kraken", None)?;
         eprintln!(
             "Fetching Kraken OHLC API rows at {}-minute resolution for {}...",
-            target_interval_minutes,
-            args.year,
+            target_interval_minutes, args.year,
         );
-        let candles = fetch_candles_since(
-            &kraken_client,
-            &config,
-            target_interval_minutes,
-            start_ts,
-        )?;
+        let candles =
+            fetch_candles_since(&kraken_client, &config, target_interval_minutes, start_ts)?;
 
         for candle in candles {
             if candle.time < start_ts || candle.time >= end_ts {
@@ -221,16 +216,14 @@ pub fn run(args: CacheRatesArgs) -> Result<()> {
         let archive_client = build_http_client("Kraken archive", None)?;
 
         let needed_quarters = missing_quarters(&missing_starts);
-        let quarterly_backfill_files = quarterly_files
-            .as_ref()
-            .and_then(|files| {
-                resolve_quarterly_archive_files(
-                    files,
-                    archive_mode.quarterly_archive_prefix(),
-                    args.year,
-                    &needed_quarters,
-                )
-            });
+        let quarterly_backfill_files = quarterly_files.as_ref().and_then(|files| {
+            resolve_quarterly_archive_files(
+                files,
+                archive_mode.quarterly_archive_prefix(),
+                args.year,
+                &needed_quarters,
+            )
+        });
 
         if let Some(files) = quarterly_backfill_files {
             for file in files {
@@ -299,9 +292,7 @@ pub fn run(args: CacheRatesArgs) -> Result<()> {
             let missing_before = missing_starts.len();
             eprintln!(
                 "Warning: exact {}-minute trade VWAP was unavailable for {} interval(s); falling back to {}-minute trade VWAP for those gaps.",
-                target_interval_minutes,
-                missing_before,
-                fallback_interval_minutes,
+                target_interval_minutes, missing_before, fallback_interval_minutes,
             );
             let mut level_stats = CacheWriteStats::default();
             for prepared_archive in &prepared_archives {
@@ -369,16 +360,18 @@ pub fn run(args: CacheRatesArgs) -> Result<()> {
     eprintln!("Replaced existing cache entries: {replaced_count}");
     eprintln!("Skipped existing cache entries: {skipped_count}");
     eprintln!("Kraken OHLC API rows: {}", recent_stats.written());
-    eprintln!("{}: {}", archive_mode.summary_label(), archive_stats.written());
+    eprintln!(
+        "{}: {}",
+        archive_mode.summary_label(),
+        archive_stats.written()
+    );
     if fallback_stats.written() > 0 {
         eprintln!(
             "Trade archive larger-candle fallback rows: {}",
             fallback_stats.written()
         );
     }
-    if used_complete_archive_fallback
-        && (archive_stats.total() > 0 || fallback_stats.total() > 0)
-    {
+    if used_complete_archive_fallback && (archive_stats.total() > 0 || fallback_stats.total() > 0) {
         eprintln!(
             "Quarterly {} archives were unavailable for {}, so the command fell back to the complete {} archive.",
             archive_mode.archive_label(),
@@ -524,10 +517,10 @@ fn closed_interval_year_bounds(
     interval_minutes: u32,
     until_end_exclusive: Option<NaiveDate>,
 ) -> Result<(i64, i64)> {
-    let year_start = NaiveDate::from_ymd_opt(year, 1, 1)
-        .ok_or_else(|| anyhow!("invalid year: {year}"))?;
-    let next_year_start = NaiveDate::from_ymd_opt(year + 1, 1, 1)
-        .ok_or_else(|| anyhow!("invalid year: {year}"))?;
+    let year_start =
+        NaiveDate::from_ymd_opt(year, 1, 1).ok_or_else(|| anyhow!("invalid year: {year}"))?;
+    let next_year_start =
+        NaiveDate::from_ymd_opt(year + 1, 1, 1).ok_or_else(|| anyhow!("invalid year: {year}"))?;
     let year_start_ts = midnight_utc_timestamp(year_start);
     let next_year_start_ts = midnight_utc_timestamp(next_year_start);
     let interval_seconds = i64::from(interval_minutes) * 60;
@@ -594,9 +587,8 @@ fn drop_cached_starts(
     kraken_pair: &str,
     interval_minutes: u32,
 ) {
-    missing_starts.retain(|start| {
-        !cache.contains_key(&cache_key(kraken_pair, interval_minutes, *start))
-    });
+    missing_starts
+        .retain(|start| !cache.contains_key(&cache_key(kraken_pair, interval_minutes, *start)));
 }
 
 fn store_cache_value(
@@ -784,9 +776,8 @@ fn ensure_archive_entry_extracted(
 
     let archive_file = File::open(archive_path)
         .with_context(|| format!("failed to open archive {}", archive_path.display()))?;
-    let mut archive = ZipArchive::new(archive_file).with_context(|| {
-        format!("failed to read ZIP archive {}", archive_path.display())
-    })?;
+    let mut archive = ZipArchive::new(archive_file)
+        .with_context(|| format!("failed to read ZIP archive {}", archive_path.display()))?;
     let entry_name = resolve_archive_entry_name(&mut archive, &expected_entry_name)?;
     eprintln!(
         "Extracting {} from {} into {}...",
@@ -805,12 +796,19 @@ fn ensure_archive_entry_extracted(
         .with_context(|| format!("failed to create {}", temp_path.display()))?;
     io::copy(&mut csv_file, &mut output)
         .with_context(|| format!("failed to write {}", temp_path.display()))?;
-    fs::rename(&temp_path, &extracted_path)
-        .with_context(|| format!("failed to move extracted data into {}", extracted_path.display()))?;
+    fs::rename(&temp_path, &extracted_path).with_context(|| {
+        format!(
+            "failed to move extracted data into {}",
+            extracted_path.display()
+        )
+    })?;
     Ok(extracted_path)
 }
 
-fn extracted_csv_timestamp_bounds(path: &Path, entry_name: &str) -> Result<Option<ArchiveCoverage>> {
+fn extracted_csv_timestamp_bounds(
+    path: &Path,
+    entry_name: &str,
+) -> Result<Option<ArchiveCoverage>> {
     let csv_file = File::open(path)
         .with_context(|| format!("failed to open extracted archive data {}", path.display()))?;
     let mut reader = csv::ReaderBuilder::new()
@@ -1075,7 +1073,11 @@ fn extract_quarterly_drive_files(
         let name_end = blob[name_start..]
             .find(".zip")
             .map(|idx| name_start + idx + 4)
-            .ok_or_else(|| anyhow!("failed to parse a quarterly {archive_label} archive filename from Google Drive"))?;
+            .ok_or_else(|| {
+                anyhow!(
+                    "failed to parse a quarterly {archive_label} archive filename from Google Drive"
+                )
+            })?;
         let name = blob[name_start..name_end].to_owned();
 
         let suffix = &blob[name_end..];
@@ -1159,7 +1161,9 @@ fn download_google_drive_file(client: &Client, file_id: &str, destination: &Path
                 ("uuid", uuid),
             ])
             .send()
-            .with_context(|| format!("failed to confirm the Google Drive download for {file_id}"))?;
+            .with_context(|| {
+                format!("failed to confirm the Google Drive download for {file_id}")
+            })?;
 
         write_response_to_file(confirmed, destination)
     } else {
@@ -1179,8 +1183,12 @@ fn ensure_archive_downloaded(
     let mut existing_coverage = None;
     if destination.exists() {
         if file.name == archive_mode.complete_archive_name() {
-            let extracted_path =
-                ensure_archive_entry_extracted(destination, &file.name, archive_pair, archive_mode)?;
+            let extracted_path = ensure_archive_entry_extracted(
+                destination,
+                &file.name,
+                archive_pair,
+                archive_mode,
+            )?;
             let coverage = inspect_archive_coverage(
                 &extracted_path,
                 &format!("cached extracted {archive_pair} data"),
@@ -1284,7 +1292,9 @@ fn ensure_archive_downloaded(
             "Saved {} to {}{}.",
             archive_file_description(file, archive_mode),
             destination.display(),
-            archive_file_size_label(destination).as_deref().unwrap_or(""),
+            archive_file_size_label(destination)
+                .as_deref()
+                .unwrap_or(""),
         );
         let extracted_path =
             ensure_archive_entry_extracted(destination, &file.name, archive_pair, archive_mode)?;
@@ -1308,8 +1318,8 @@ fn inspect_archive_coverage(
     target_interval_minutes: u32,
 ) -> Result<ArchiveCoverage> {
     eprintln!("Scanning coverage from {} at {}...", label, path.display());
-    let coverage = extracted_csv_timestamp_bounds(path, label)?
-        .context("archive pair CSV is empty")?;
+    let coverage =
+        extracted_csv_timestamp_bounds(path, label)?.context("archive pair CSV is empty")?;
     eprintln!(
         "{} appears to cover {} through {}.",
         label,
@@ -1325,8 +1335,7 @@ fn accept_complete_archive_replacement(
 ) -> bool {
     match existing_coverage {
         Some(existing) => {
-            downloaded_coverage.first <= existing.first
-                && downloaded_coverage.last >= existing.last
+            downloaded_coverage.first <= existing.first && downloaded_coverage.last >= existing.last
         }
         None => true,
     }
@@ -1350,7 +1359,11 @@ fn archive_file_description(file: &DriveFile, archive_mode: ArchiveBackfillMode)
             archive_mode.archive_label()
         )
     } else {
-        format!("Kraken {} archive {}", archive_mode.archive_label(), file.name)
+        format!(
+            "Kraken {} archive {}",
+            archive_mode.archive_label(),
+            file.name
+        )
     }
 }
 
@@ -1642,13 +1655,12 @@ mod tests {
     use crate::common::AppConfig;
 
     use super::{
-        ArchiveCoverage, CacheRatesArgs, CacheWriteOutcome, DriveFile,
-        accept_complete_archive_replacement,
-        PreparedArchive, archive_download_path, archive_pair_name, ensure_archive_downloaded,
-        extracted_archive_entry_path, extract_quarterly_drive_files, parse_args_from,
-        read_ohlcvt_daily_csv, read_trade_interval_csv, resolve_archive_entry_name,
-        resolve_quarterly_archive_files, should_store_api_candle, store_cache_value,
-        target_interval_minutes,
+        ArchiveCoverage, CacheRatesArgs, CacheWriteOutcome, DriveFile, PreparedArchive,
+        accept_complete_archive_replacement, archive_download_path, archive_pair_name,
+        ensure_archive_downloaded, extract_quarterly_drive_files, extracted_archive_entry_path,
+        parse_args_from, read_ohlcvt_daily_csv, read_trade_interval_csv,
+        resolve_archive_entry_name, resolve_quarterly_archive_files, should_store_api_candle,
+        store_cache_value, target_interval_minutes,
     };
 
     const REAL_XBTEUR_1440_SAMPLE: &str = "\
@@ -1673,11 +1685,7 @@ mod tests {
 
     #[test]
     fn parses_cache_rates_args() {
-        let args = parse_args_from(
-            vec!["2024".to_owned()],
-            super::USAGE,
-        )
-        .expect("args");
+        let args = parse_args_from(vec!["2024".to_owned()], super::USAGE).expect("args");
         assert_eq!(
             args,
             CacheRatesArgs {
@@ -1691,11 +1699,8 @@ mod tests {
 
     #[test]
     fn parses_cache_rates_vwap_flag() {
-        let args = parse_args_from(
-            vec!["--vwap".to_owned(), "2024".to_owned()],
-            super::USAGE,
-        )
-        .expect("args");
+        let args = parse_args_from(vec!["--vwap".to_owned(), "2024".to_owned()], super::USAGE)
+            .expect("args");
         assert_eq!(
             args,
             CacheRatesArgs {
@@ -1758,10 +1763,7 @@ mod tests {
     #[test]
     fn parses_cache_rates_until_day_inclusive() {
         let args = parse_args_from(
-            vec![
-                "--until=2026-06-30".to_owned(),
-                "--vwap".to_owned(),
-            ],
+            vec!["--until=2026-06-30".to_owned(), "--vwap".to_owned()],
             super::USAGE,
         )
         .expect("args");
@@ -1804,20 +1806,21 @@ mod tests {
         )
         .expect_err("should fail");
 
-        assert!(err.to_string().contains("does not match requested year 2026"));
+        assert!(
+            err.to_string()
+                .contains("does not match requested year 2026")
+        );
     }
 
     #[test]
     fn rejects_extra_cache_rates_args() {
-        let err = parse_args_from(
-            vec!["2024".to_owned(), "extra".to_owned()],
-            super::USAGE,
-        )
-        .expect_err("should fail");
+        let err = parse_args_from(vec!["2024".to_owned(), "extra".to_owned()], super::USAGE)
+            .expect_err("should fail");
 
-        assert!(err
-            .to_string()
-            .contains("usage: btc_fiat_value cache-rates"));
+        assert!(
+            err.to_string()
+                .contains("usage: btc_fiat_value cache-rates")
+        );
     }
 
     #[test]
@@ -1974,8 +1977,7 @@ mod tests {
             "';if (window['_DRIVE_ivdc'])"
         );
 
-        let files = extract_quarterly_drive_files(html, "Kraken_OHLCVT_", "OHLCVT")
-            .expect("files");
+        let files = extract_quarterly_drive_files(html, "Kraken_OHLCVT_", "OHLCVT").expect("files");
         assert_eq!(files["Kraken_OHLCVT_Q1_2024.zip"].id, "abc123");
         assert_eq!(files["Kraken_OHLCVT_Q2_2024.zip"].id, "def456");
     }
@@ -1991,8 +1993,8 @@ mod tests {
             "';if (window['_DRIVE_ivdc'])"
         );
 
-        let files = extract_quarterly_drive_files(html, "Kraken_Trading_History_", "trade")
-            .expect("files");
+        let files =
+            extract_quarterly_drive_files(html, "Kraken_Trading_History_", "trade").expect("files");
         assert_eq!(files["Kraken_Trading_History_Q1_2024.zip"].id, "abc123");
         assert_eq!(files["Kraken_Trading_History_Q2_2024.zip"].id, "def456");
     }
@@ -2054,15 +2056,15 @@ mod tests {
 
     #[test]
     fn archive_ohlc_matches_live_overlap_day_fields() {
-        let record = csv::StringRecord::from(
-            REAL_XBTEUR_1440_OVERLAP_ROW
-                .split(',')
-                .collect::<Vec<_>>(),
-        );
+        let record =
+            csv::StringRecord::from(REAL_XBTEUR_1440_OVERLAP_ROW.split(',').collect::<Vec<_>>());
 
         // Sanity check against the live Kraken 1440 OHLC API on 2024-04-01 UTC:
         // the daily candle boundaries and OHLC fields match the archive row.
-        assert_eq!(super::parse_archive_timestamp(&record, "XBTEUR_1440.csv").unwrap(), 1711929600);
+        assert_eq!(
+            super::parse_archive_timestamp(&record, "XBTEUR_1440.csv").unwrap(),
+            1711929600
+        );
         assert_eq!(
             super::parse_archive_number(&record, 1, "open", "XBTEUR_1440.csv").unwrap(),
             66130.0
@@ -2101,14 +2103,19 @@ mod tests {
         )
         .expect_err("row should fail");
 
-        assert!(err.to_string().contains("XBTEUR_1440.csv row is missing the close column"));
+        assert!(
+            err.to_string()
+                .contains("XBTEUR_1440.csv row is missing the close column")
+        );
     }
 
     #[test]
     fn reports_invalid_close_price_clearly() {
         let mut reader = csv::ReaderBuilder::new()
             .has_headers(false)
-            .from_reader(Cursor::new("1672531200,15423.8,15524.8,15388.5,nope,532.29189029,11775\n"));
+            .from_reader(Cursor::new(
+                "1672531200,15423.8,15524.8,15388.5,nope,532.29189029,11775\n",
+            ));
         let mut missing_days = BTreeSet::from([1672531200_i64]);
         let mut cache = HashMap::new();
 
@@ -2124,9 +2131,10 @@ mod tests {
         )
         .expect_err("row should fail");
 
-        assert!(err
-            .to_string()
-            .contains("invalid close value nope in XBTEUR_1440.csv"));
+        assert!(
+            err.to_string()
+                .contains("invalid close value nope in XBTEUR_1440.csv")
+        );
     }
 
     #[test]
@@ -2158,8 +2166,14 @@ mod tests {
         assert_eq!(stats.inserted, 2);
         assert_eq!(stats.replaced, 0);
         assert_eq!(stats.skipped, 0);
-        assert_eq!(cache["XXBTZEUR:1440:1735689600"], super::normalize_fiat_rate(day1));
-        assert_eq!(cache["XXBTZEUR:1440:1735776000"], super::normalize_fiat_rate(day2));
+        assert_eq!(
+            cache["XXBTZEUR:1440:1735689600"],
+            super::normalize_fiat_rate(day1)
+        );
+        assert_eq!(
+            cache["XXBTZEUR:1440:1735776000"],
+            super::normalize_fiat_rate(day2)
+        );
         assert!(missing_days.is_empty());
     }
 
@@ -2193,8 +2207,14 @@ mod tests {
         assert_eq!(stats.inserted, 2);
         assert_eq!(stats.replaced, 0);
         assert_eq!(stats.skipped, 0);
-        assert_eq!(cache["XXBTZEUR:60:1735689600"], super::normalize_fiat_rate(107.5));
-        assert_eq!(cache["XXBTZEUR:60:1735693200"], super::normalize_fiat_rate(105.0));
+        assert_eq!(
+            cache["XXBTZEUR:60:1735689600"],
+            super::normalize_fiat_rate(107.5)
+        );
+        assert_eq!(
+            cache["XXBTZEUR:60:1735693200"],
+            super::normalize_fiat_rate(105.0)
+        );
         assert!(missing_hours.is_empty());
     }
 
@@ -2207,8 +2227,12 @@ mod tests {
         let mut reader = csv::ReaderBuilder::new()
             .has_headers(false)
             .from_reader(Cursor::new(trades));
-        let mut missing_hours =
-            BTreeSet::from([1735689600_i64, 1735693200_i64, 1735696800_i64, 1735700400_i64]);
+        let mut missing_hours = BTreeSet::from([
+            1735689600_i64,
+            1735693200_i64,
+            1735696800_i64,
+            1735700400_i64,
+        ]);
         let mut cache = HashMap::new();
 
         let stats = read_trade_interval_csv(
@@ -2228,10 +2252,22 @@ mod tests {
         assert_eq!(stats.inserted, 4);
         assert_eq!(stats.replaced, 0);
         assert_eq!(stats.skipped, 0);
-        assert_eq!(cache["XXBTZEUR:60:1735689600"], super::normalize_fiat_rate(vwap));
-        assert_eq!(cache["XXBTZEUR:60:1735693200"], super::normalize_fiat_rate(vwap));
-        assert_eq!(cache["XXBTZEUR:60:1735696800"], super::normalize_fiat_rate(vwap));
-        assert_eq!(cache["XXBTZEUR:60:1735700400"], super::normalize_fiat_rate(vwap));
+        assert_eq!(
+            cache["XXBTZEUR:60:1735689600"],
+            super::normalize_fiat_rate(vwap)
+        );
+        assert_eq!(
+            cache["XXBTZEUR:60:1735693200"],
+            super::normalize_fiat_rate(vwap)
+        );
+        assert_eq!(
+            cache["XXBTZEUR:60:1735696800"],
+            super::normalize_fiat_rate(vwap)
+        );
+        assert_eq!(
+            cache["XXBTZEUR:60:1735700400"],
+            super::normalize_fiat_rate(vwap)
+        );
         assert!(missing_hours.is_empty());
     }
 
@@ -2264,8 +2300,14 @@ mod tests {
         assert_eq!(stats.inserted, 2);
         assert_eq!(stats.replaced, 0);
         assert_eq!(stats.skipped, 0);
-        assert_eq!(cache["XXBTZEUR:60:1735693200"], super::normalize_fiat_rate(vwap));
-        assert_eq!(cache["XXBTZEUR:60:1735696800"], super::normalize_fiat_rate(vwap));
+        assert_eq!(
+            cache["XXBTZEUR:60:1735693200"],
+            super::normalize_fiat_rate(vwap)
+        );
+        assert_eq!(
+            cache["XXBTZEUR:60:1735696800"],
+            super::normalize_fiat_rate(vwap)
+        );
         assert!(missing_hours.is_empty());
     }
 
@@ -2323,7 +2365,10 @@ mod tests {
         assert_eq!(stats.inserted, 0);
         assert_eq!(stats.replaced, 0);
         assert_eq!(stats.skipped, 1);
-        assert_eq!(cache["XXBTZEUR:1440:1735689600"], super::normalize_fiat_rate(day1));
+        assert_eq!(
+            cache["XXBTZEUR:1440:1735689600"],
+            super::normalize_fiat_rate(day1)
+        );
         assert!(missing_days.is_empty());
     }
 
@@ -2334,8 +2379,7 @@ mod tests {
             .from_reader(Cursor::new(REAL_XBTEUR_2026_03_21_TRADES));
         // 2026-03-21 02:00–04:59 UTC — three quiet hours from real Kraken trades.
         // API 60-min OHLC VWAPs for this window: 60995.3, 61074.2, 61145.7
-        let mut missing_hours =
-            BTreeSet::from([1774058400_i64, 1774062000_i64, 1774065600_i64]);
+        let mut missing_hours = BTreeSet::from([1774058400_i64, 1774062000_i64, 1774065600_i64]);
         let mut cache = HashMap::new();
 
         let stats = read_trade_interval_csv(
@@ -2354,9 +2398,18 @@ mod tests {
         assert_eq!(stats.inserted, 3);
         assert_eq!(stats.replaced, 0);
         assert_eq!(stats.skipped, 0);
-        assert_eq!(cache["XXBTZEUR:60:1774058400"], super::normalize_fiat_rate(60995.38));
-        assert_eq!(cache["XXBTZEUR:60:1774062000"], super::normalize_fiat_rate(61074.23));
-        assert_eq!(cache["XXBTZEUR:60:1774065600"], super::normalize_fiat_rate(61145.71));
+        assert_eq!(
+            cache["XXBTZEUR:60:1774058400"],
+            super::normalize_fiat_rate(60995.38)
+        );
+        assert_eq!(
+            cache["XXBTZEUR:60:1774062000"],
+            super::normalize_fiat_rate(61074.23)
+        );
+        assert_eq!(
+            cache["XXBTZEUR:60:1774065600"],
+            super::normalize_fiat_rate(61145.71)
+        );
         assert!(missing_hours.is_empty());
     }
 
@@ -2381,9 +2434,10 @@ mod tests {
         )
         .expect_err("row should fail");
 
-        assert!(err
-            .to_string()
-            .contains("XBTEUR.csv row is missing the volume column"));
+        assert!(
+            err.to_string()
+                .contains("XBTEUR.csv row is missing the volume column")
+        );
     }
 
     #[test]
@@ -2407,9 +2461,10 @@ mod tests {
         )
         .expect_err("row should fail");
 
-        assert!(err
-            .to_string()
-            .contains("invalid volume value nope in XBTEUR.csv"));
+        assert!(
+            err.to_string()
+                .contains("invalid volume value nope in XBTEUR.csv")
+        );
     }
 
     #[test]

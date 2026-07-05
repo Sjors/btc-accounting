@@ -162,11 +162,17 @@ impl RegtestNode {
 
         if let Some(err) = raw.get("error").filter(|e| !e.is_null()) {
             let code = err.get("code").and_then(|c| c.as_i64()).unwrap_or(-1);
-            let message = err.get("message").and_then(|m| m.as_str()).unwrap_or("unknown error");
+            let message = err
+                .get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("unknown error");
             bail!("{method}: {message} (code {code})");
         }
 
-        let result_val = raw.get("result").cloned().unwrap_or(serde_json::Value::Null);
+        let result_val = raw
+            .get("result")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
         serde_json::from_value(result_val)
             .with_context(|| format!("failed to decode {method} result"))
     }
