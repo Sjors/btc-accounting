@@ -217,6 +217,13 @@ pub fn run(args: CacheRatesArgs) -> Result<()> {
 
         let needed_quarters = missing_quarters(&missing_starts);
         let quarterly_backfill_files = quarterly_files.as_ref().and_then(|files| {
+            log_quarterly_archive_coverage(
+                files,
+                archive_mode.quarterly_archive_prefix(),
+                args.year,
+                &needed_quarters,
+                archive_mode.archive_label(),
+            );
             resolve_quarterly_archive_files(
                 files,
                 archive_mode.quarterly_archive_prefix(),
@@ -655,6 +662,49 @@ fn resolve_quarterly_archive_files(
     }
 
     Some(files)
+}
+
+fn log_quarterly_archive_coverage(
+    quarterly_files: &HashMap<String, DriveFile>,
+    file_prefix: &str,
+    year: i32,
+    needed_quarters: &BTreeSet<u32>,
+    archive_label: &str,
+) {
+    if needed_quarters.is_empty() {
+        return;
+    }
+
+    let names = quarterly_archive_names(file_prefix, year, needed_quarters);
+    let missing_names: Vec<_> = names
+        .iter()
+        .filter(|name| !quarterly_files.contains_key(*name))
+        .cloned()
+        .collect();
+
+    eprintln!(
+        "Looking for Kraken {archive_label} quarterly archive(s): {}.",
+        names.join(", ")
+    );
+    if missing_names.is_empty() {
+        eprintln!("Found all needed Kraken {archive_label} quarterly archive(s).");
+    } else {
+        eprintln!(
+            "Missing Kraken {archive_label} quarterly archive(s): {}.",
+            missing_names.join(", ")
+        );
+    }
+}
+
+fn quarterly_archive_names(
+    file_prefix: &str,
+    year: i32,
+    needed_quarters: &BTreeSet<u32>,
+) -> Vec<String> {
+    needed_quarters
+        .iter()
+        .map(|quarter| format!("{file_prefix}Q{quarter}_{year}.zip"))
+        .collect()
 }
 
 fn prepare_archive_for_backfill(
